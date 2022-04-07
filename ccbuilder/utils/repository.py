@@ -7,7 +7,7 @@ from functools import cache
 from pathlib import Path
 from typing import Optional
 
-import utils
+import ccbuilder.utils.utils as utils
 
 
 class Repo:
@@ -15,16 +15,13 @@ class Repo:
         self.path = os.path.abspath(path)
         self.main_branch = main_branch
 
-    @staticmethod
-    def repo_from_setting(setting: utils.CompilerSetting) -> Repo:
-
-        return Repo(setting.compiler_config.repo, setting.compiler_config.main_branch)
-
     @cache
     def get_best_common_ancestor(self, rev_a: str, rev_b: str) -> str:
         a = self.rev_to_commit(rev_a)
         b = self.rev_to_commit(rev_b)
-        return utils.run_cmd(f"git -C {self.path} merge-base {a} {b}")
+        return utils.run_cmd(
+            f"git -C {self.path} merge-base {a} {b}", capture_output=True
+        )
 
     @cache
     def rev_to_commit(self, rev: str) -> str:
@@ -40,11 +37,12 @@ class Repo:
         # Could support list of revs...
         if rev == "trunk" or rev == "master" or rev == "main":
             rev = self.main_branch
-        return utils.run_cmd(f"git -C {self.path} rev-parse {rev}")
+        print(f"git -C {self.path} rev-parse {rev}")
+        return utils.run_cmd(f"git -C {self.path} rev-parse {rev}", capture_output=True)
 
     def rev_to_range_needing_patch(self, introducer: str, fixer: str) -> list[str]:
         """
-        This functions aim is best described with a picture
+        This function's aim is best described with a picture
            O---------P
           /   G---H   \      I---J       L--M
          /   /     \   \    /     \     /
@@ -67,12 +65,13 @@ class Repo:
 
         # Get all commits with at least 2 parents
         merges_after_introducer = utils.run_cmd(
-            f"git -C {self.path} rev-list --merges {introducer}~..{fixer}"
+            f"git -C {self.path} rev-list --merges {introducer}~..{fixer}",
+            capture_output=True,
         )
         if len(merges_after_introducer) > 0:
             # Get all parent commits of these (so for C it would be H, Z and R)
             cmd = f"git -C {self.path} rev-parse " + "^@ ".join(merges_after_introducer)
-            merger_parents = set(utils.run_cmd(cmd).split("\n"))
+            merger_parents = set(utils.run_cmd(cmd, capture_output=True).split("\n"))
 
             # Remove all parents which are child of the requested commit
             unwanted_merger_parents = [
@@ -85,20 +84,26 @@ class Repo:
         cmd = f"git -C {self.path} rev-list {fixer} ^{introducer} " + " ^".join(
             unwanted_merger_parents
         )
-        res = [commit for commit in utils.run_cmd(cmd).split("\n") if commit != ""] + [
-            introducer
-        ]
+        res = [
+            commit
+            for commit in utils.run_cmd(cmd, capture_output=True).split("\n")
+            if commit != ""
+        ] + [introducer]
         return res
 
     def direct_first_parent_path(self, older: str, younger: str) -> list[str]:
         cmd = f"git -C {self.path} rev-list --first-parent {younger} ^{older}"
-        res = [commit for commit in utils.run_cmd(cmd).split("\n") if commit != ""] + [
-            older
-        ]
+        res = [
+            commit
+            for commit in utils.run_cmd(cmd, capture_output=True).split("\n")
+            if commit != ""
+        ] + [older]
         return res
 
     def rev_to_commit_list(self, rev: str) -> list[str]:
-        return utils.run_cmd(f"git -C {self.path} log --format=%H {rev}").split("\n")
+        return utils.run_cmd(
+            f"git -C {self.path} log --format=%H {rev}", capture_output=True
+        ).split("\n")
 
     def is_ancestor(self, rev_old: str, rev_young: str) -> bool:
         rev_old = self.rev_to_commit(rev_old)
@@ -134,7 +139,12 @@ class Repo:
 
     def get_unix_timestamp(self, rev: str) -> int:
         rev = self.rev_to_commit(rev)
-        return int(utils.run_cmd(f"git -C {self.path} log -1 --format=%at {rev}"))
+        return int(
+            utils.run_cmd(
+                f"git -C {self.path} log -1 --format=%at {rev}",
+                capture_output=True,
+            )
+        )
 
     def apply(self, patches: list[Path], check: bool = False) -> bool:
         patches = [patch.absolute() for patch in patches]
