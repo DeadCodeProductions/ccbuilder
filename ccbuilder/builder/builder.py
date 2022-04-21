@@ -91,10 +91,10 @@ def gcc_build_and_install(prefix: Path, cores: int) -> None:
 def _run_build_and_install(job: CompilerBuildJob, prefix: Path, cores: int) -> None:
     os.makedirs("build")
     if job.compiler_config.compiler == Compiler.GCC:
-        gcc_build_and_install(prefix, cores)
+        gcc_build_and_install(prefix / f"gcc-{job.commit_to_build}", cores)
     else:
         assert job.compiler_config.compiler == Compiler.LLVM
-        llvm_build_and_install(prefix, cores)
+        llvm_build_and_install(prefix / f"llvm-{job.commit_to_build}", cores)
 
 
 def build_and_install_compiler(

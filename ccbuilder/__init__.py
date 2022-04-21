@@ -129,12 +129,14 @@ def run_as_module() -> None:
                 args.revision,
                 PatchDB(Path(args.patches_dir) / "patchdb.json"),
             ),
-            args.prefix,
+            Path(args.prefix),
             args.jobs,
         )
     elif args.command == "patch":
         patcher = Patcher(
-            args.prefix, PatchDB(Path(args.patches_dir) / "patchdb.json"), args.jobs
+            Path(args.prefix),
+            PatchDB(Path(args.patches_dir) / "patchdb.json"),
+            args.jobs,
         )
         if args.find_ranges:
             patcher.find_ranges(cconfig, args.revision, args.patches)
