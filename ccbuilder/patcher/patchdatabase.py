@@ -26,8 +26,9 @@ def _save_db(func: Callable[..., T]) -> Callable[..., T]:
 class PatchDB:
     def __init__(self, path_to_db: Path):
         self.path = os.path.abspath(path_to_db)
+        self.data: dict[str, Any] = {}
         with open(self.path, "r") as f:
-            self.data: dict[str, Any] = json.load(f)
+            self.data = json.load(f)
 
     @_save_db
     def save(self, patch: Path, commits: list[str]) -> None:

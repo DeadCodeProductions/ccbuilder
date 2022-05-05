@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Iterator
 from contextlib import contextmanager
 
+from typing import TextIO
+
 import ccbuilder.utils.repository as repository
 
 
@@ -31,8 +33,23 @@ def run_cmd(
         shlex.split(cmd), capture_output=capture_output, check=True, env=env
     )
     if capture_output:
-        return res.stdout.decode("utf-8")
+        return res.stdout.decode("utf-8").strip()
     return ""
+
+
+def run_cmd_to_logfile(
+    cmd: str, log_file: TextIO, additional_env: dict[str, str] = {}
+) -> None:
+    env = os.environ.copy()
+    env.update(additional_env)
+    subprocess.run(
+        shlex.split(cmd),
+        check=True,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=env,
+        capture_output=False,
+    )
 
 
 class Compiler(Enum):
@@ -99,11 +116,9 @@ releases = {
 }
 
 
-def get_compiler_config(compiler_name: str, repo_prefix_path: str) -> CompilerConfig:
+def get_compiler_config(compiler_name: str, repo_prefix_path: Path) -> CompilerConfig:
     assert compiler_name in ["llvm", "gcc"]
-    repo_path = Path(repo_prefix_path) / (
-        "gcc" if compiler_name == "gcc" else "llvm-project"
-    )
+    repo_path = repo_prefix_path / ("gcc" if compiler_name == "gcc" else "llvm-project")
     main_branch = "master" if compiler_name == "gcc" else "main"
     return CompilerConfig(
         Compiler.GCC if compiler_name == "gcc" else Compiler.LLVM,

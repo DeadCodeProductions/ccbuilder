@@ -1,1 +1,5 @@
 include ccbuilder/data/*/*
+include ccbuilder/py.typed
+include ccbuilder/builder/py.typed
+include ccbuilder/utils/py.typed
+include ccbuilder/patcher/py.typed

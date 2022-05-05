@@ -31,6 +31,7 @@ from ccbuilder.builder.builder import (
     get_compiler_build_job,
     BuildException,
     CompilerBuildJob,
+    Builder,
 )
 from ccbuilder.patcher.patchdatabase import PatchDB
 
@@ -44,10 +45,11 @@ class PatchingResult(Enum):
 
 
 class Patcher:
-    def __init__(self, prefix: Path, patchdb: PatchDB, cores: int):
+    def __init__(self, prefix: Path, patchdb: PatchDB, builder: Builder, cores: int):
         self.prefix = prefix
         self.patchdb = patchdb
         self.cores = cores
+        self.builder = builder
 
     def _build(
         self,
@@ -55,9 +57,8 @@ class Patcher:
         rev: str,
         additional_patches: list[Path] = [],
     ) -> None:
-        build_job = get_compiler_build_job(compiler_config, rev, self.patchdb)
-        build_and_install_compiler(
-            build_job, self.prefix, self.cores, additional_patches
+        self.builder.build_rev_with_config(
+            compiler_config, revision=rev, additional_patches=additional_patches
         )
 
     def _check_building_patches(
