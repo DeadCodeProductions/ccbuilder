@@ -157,7 +157,7 @@ def _parse_args() -> Namespace:
 def run_as_module() -> None:
     args = _parse_args()
     _initialize(args)
-    cconfig = get_compiler_config(args.compiler, args.repos_dir)
+    cconfig = get_compiler_config(args.compiler, Path(args.repos_dir))
 
     patchdb = PatchDB(Path(args.patches_dir) / "patchdb.json")
     bldr = Builder(Path(args.prefix.strip()), patchdb)
