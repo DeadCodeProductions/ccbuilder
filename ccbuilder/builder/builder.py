@@ -1,22 +1,24 @@
-import time
-import os
 import logging
-import subprocess
 import multiprocessing
+import os
+import re
+import shlex
+import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, TextIO
 
+from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.utils.utils import (
+    Compiler,
+    CompilerConfig,
+    get_compiler_config,
     pushd,
     run_cmd,
     run_cmd_to_logfile,
-    CompilerConfig,
-    Compiler,
-    get_compiler_config,
 )
-from ccbuilder.patcher.patchdatabase import PatchDB
 
 
 class BuildException(Exception):
@@ -64,11 +66,8 @@ def patch_if_necessary(
 def llvm_build_and_install(prefix: Path, cores: int, log_file: TextIO) -> None:
     os.chdir("build")
     logging.debug("LLVM: Starting cmake")
-    cmake_cmd = (
-        "cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS=clang"
-        " -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_USE_NEWPM=ON"
-        f" -DLLVM_TARGETS_TO_BUILD=X86 -DCMAKE_INSTALL_PREFIX={prefix} ../llvm"
-    )
+    cmake_cmd = f"cmake ../llvm -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS=clang -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_USE_NEWPM=ON -DLLVM_TARGETS_TO_BUILD=X86 -DCMAKE_INSTALL_PREFIX={prefix} -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON"
+
     run_cmd_to_logfile(
         cmake_cmd, additional_env={"CC": "clang", "CXX": "clang++"}, log_file=log_file
     )
@@ -92,7 +91,7 @@ def gcc_build_and_install(prefix: Path, cores: int, log_file: TextIO) -> None:
 
     logging.debug("GCC: Starting to build...")
     run_cmd_to_logfile(f"make -j {cores}", log_file=log_file)
-    run_cmd_to_logfile("make install", log_file=log_file)
+    run_cmd_to_logfile("make install-strip", log_file=log_file)
 
 
 def get_install_path_from_job(job: CompilerBuildJob, prefix: Path) -> Path:

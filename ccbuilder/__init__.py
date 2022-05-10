@@ -2,22 +2,21 @@ import logging
 import shlex
 from argparse import ArgumentParser, Namespace
 from multiprocessing import cpu_count
-from subprocess import run
 from pathlib import Path
+from subprocess import run
 
 from ccbuilder.builder.builder import (
-    get_compiler_build_job,
-    build_and_install_compiler,
-    CompilerBuildJob,
     Builder,
-    get_install_path_from_job,
     BuildException,
+    CompilerBuildJob,
+    build_and_install_compiler,
+    get_compiler_build_job,
+    get_install_path_from_job,
 )
-
-from ccbuilder.utils.utils import get_compiler_config, CompilerConfig, Compiler
-from ccbuilder.utils.repository import Repo
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
+from ccbuilder.utils.repository import Repo
+from ccbuilder.utils.utils import Compiler, CompilerConfig, get_compiler_config
 
 __all__ = [
     "get_compiler_config",
