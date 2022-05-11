@@ -1,24 +1,19 @@
 import logging
 import multiprocessing
 import os
-import re
-import shlex
+import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from types import TracebackType
 from typing import Optional, TextIO
 
 from ccbuilder.patcher.patchdatabase import PatchDB
-from ccbuilder.utils.utils import (
-    Compiler,
-    CompilerConfig,
-    get_compiler_config,
-    pushd,
-    run_cmd,
-    run_cmd_to_logfile,
-)
+from ccbuilder.utils.utils import (Compiler, CompilerConfig,
+                                   get_compiler_config, run_cmd,
+                                   run_cmd_to_logfile)
 
 
 class BuildException(Exception):
@@ -30,6 +25,47 @@ class CompilerBuildJob:
     compiler_config: CompilerConfig
     commit_to_build: str
     patchdb: PatchDB
+
+
+@dataclass
+class BuildContext:
+    cache_prefix: Path
+    success_indicator: Path
+    job: CompilerBuildJob
+    logdir: Path
+
+    def __enter__(self) -> tuple[Path, TextIO]:
+        self.build_dir = tempfile.mkdtemp()
+        os.makedirs(self.cache_prefix, exist_ok=True)
+
+        self.starting_cwd = os.getcwd()
+        os.chdir(self.build_dir)
+
+        # Build log file
+        current_time = time.strftime("%Y%m%d-%H%M%S")
+        build_log_path = (
+            self.logdir
+            / f"{current_time}-{self.job.compiler_config.name}-{self.job.commit_to_build}.log"
+        )
+        self.build_log = open(build_log_path, "a")
+        logging.info(f"Build log at {build_log_path}")
+
+        return (Path(self.build_dir), self.build_log)
+
+    def __exit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc_value: Optional[BaseException],
+        exc_traceback: Optional[TracebackType],
+    ) -> None:
+        self.build_log.close()
+        shutil.rmtree(self.build_dir)
+        os.chdir(self.starting_cwd)
+
+        # Build was not successful
+        if not self.success_indicator.exists():
+            # remove cache entry
+            shutil.rmtree(self.cache_prefix)
 
 
 def apply_patches(git_dir: Path, patches: list[Path]) -> bool:
@@ -60,7 +96,7 @@ def patch_if_necessary(
     patches = job.patchdb.required_patches(job.commit_to_build) + additional_patches
     if patches:
         if not apply_patches(working_dir, patches):
-            raise BuildException("Could not apply patches: {patches}")
+            raise BuildException(f"Could not apply patches: {patches}")
 
 
 def llvm_build_and_install(prefix: Path, cores: int, log_file: TextIO) -> None:
@@ -120,26 +156,24 @@ def _run_build_and_install(
 def build_and_install_compiler(
     job: CompilerBuildJob, prefix: Path, cores: int, additional_patches: list[Path] = []
 ) -> Path:
+    install_path = get_install_path_from_job(job, prefix)
+    success_indicator = install_path / "DONE"
 
-    current_time = time.strftime("%Y%m%d-%H%M%S")
-    build_log_path = prefix / "logs"
-    build_log_path.mkdir(exist_ok=True)
-    build_log_path = (
-        build_log_path
-        / f"{current_time}-{job.compiler_config.name}-{job.commit_to_build}.log"
-    )
-
-    build_log = open(build_log_path, "a")
-    logging.info(f"Build log at {build_log_path}")
-    with TemporaryDirectory() as tmpdir:
+    logdir = prefix / "logs"
+    logdir.mkdir(exist_ok=True)
+    with BuildContext(install_path, success_indicator, job, logdir) as (
+        tmpdir,
+        build_log,
+    ):
         run_cmd_to_logfile(
             f"git -C {str(job.compiler_config.repo.path)} worktree"
             f" add {tmpdir} {job.commit_to_build} -f",
             log_file=build_log,
         )
-        with pushd(tmpdir):
-            patch_if_necessary(job, Path(tmpdir), additional_patches)
-            return _run_build_and_install(job, prefix, cores, build_log)
+        patch_if_necessary(job, Path(tmpdir), additional_patches)
+        res = _run_build_and_install(job, prefix, cores, build_log)
+        success_indicator.touch()
+        return res
 
 
 def get_compiler_build_job(
@@ -154,8 +188,7 @@ class Builder:
     def __init__(self, prefix: Path, patchdb: PatchDB, cores: Optional[int] = None):
         self.prefix = prefix
         self.patchdb = patchdb
-        if cores is None:
-            self.cores = cores if cores else multiprocessing.cpu_count()
+        self.cores = cores if cores else multiprocessing.cpu_count()
 
     def build_job(
         self, job: CompilerBuildJob, additional_patches: list[Path] = []

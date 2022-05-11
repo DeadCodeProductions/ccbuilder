@@ -5,14 +5,11 @@ from multiprocessing import cpu_count
 from pathlib import Path
 from subprocess import run
 
-from ccbuilder.builder.builder import (
-    Builder,
-    BuildException,
-    CompilerBuildJob,
-    build_and_install_compiler,
-    get_compiler_build_job,
-    get_install_path_from_job,
-)
+from ccbuilder.builder.builder import (Builder, BuildException,
+                                       CompilerBuildJob,
+                                       build_and_install_compiler,
+                                       get_compiler_build_job,
+                                       get_install_path_from_job)
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
 from ccbuilder.utils.repository import Repo

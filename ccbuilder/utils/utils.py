@@ -12,16 +12,6 @@ from typing import Iterator, TextIO
 import ccbuilder.utils.repository as repository
 
 
-@contextmanager
-def pushd(new_dir: str) -> Iterator[None]:
-    previous_dir = os.getcwd()
-    os.chdir(new_dir)
-    try:
-        yield
-    finally:
-        os.chdir(previous_dir)
-
-
 def run_cmd(
     cmd: str, capture_output: bool = False, additional_env: dict[str, str] = {}
 ) -> str:
