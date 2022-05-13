@@ -145,11 +145,14 @@ def _run_build_and_install(
 ) -> Path:
     os.makedirs("build")
     install_path = get_install_path_from_job(job, prefix)
-    if job.compiler_config.compiler == Compiler.GCC:
-        gcc_build_and_install(install_path, cores, log_file)
-    else:
-        assert job.compiler_config.compiler == Compiler.LLVM
-        llvm_build_and_install(install_path, cores, log_file)
+    try:
+        if job.compiler_config.compiler == Compiler.GCC:
+            gcc_build_and_install(install_path, cores, log_file)
+        else:
+            assert job.compiler_config.compiler == Compiler.LLVM
+            llvm_build_and_install(install_path, cores, log_file)
+    except subprocess.CalledProcessError as e:
+        raise BuildException(f"Build failed: {e}")
     return install_path
 
 
@@ -215,3 +218,29 @@ class Builder:
         return self.build_rev_with_config(
             compiler_config, revision=revision, additional_patches=additional_patches
         )
+
+
+def get_compiler_executable_from_job(job: CompilerBuildJob, bldr: Builder) -> Path:
+    base = bldr.build_job(job)
+    if job.compiler_config.compiler == Compiler.GCC:
+        return base / "bin" / "gcc"
+    else:
+        return base / "bin" / "clang"
+
+
+def get_compiler_executable_from_revision_with_config(
+    compiler_config: CompilerConfig, revision: str, bldr: Builder
+) -> Path:
+    job = get_compiler_build_job(
+        compiler_config, revision=revision, patchdb=bldr.patchdb
+    )
+    return get_compiler_executable_from_job(job, bldr)
+
+
+def get_compiler_executable_from_revision_with_name(
+    compiler_name: str, revision: str, bldr: Builder
+) -> Path:
+    compiler_config = get_compiler_config(compiler_name, bldr.prefix)
+    return get_compiler_executable_from_revision_with_config(
+        compiler_config, revision, bldr
+    )
