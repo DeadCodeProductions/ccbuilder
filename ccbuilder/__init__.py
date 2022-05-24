@@ -183,9 +183,9 @@ def handle_build(args: Namespace, bldr: Builder) -> bool:
     patches = [Path(p.strip()).absolute() for p in args.patches] if args.patches else []
     if args.command == "build":
         cconfig = get_compiler_config(args.compiler, Path(args.repos_dir))
-        bldr.build_rev_with_config(
+        print(bldr.build_rev_with_config(
             cconfig, args.revision.strip(), additional_patches=patches
-        )
+        ))
         return True
     return False
 
