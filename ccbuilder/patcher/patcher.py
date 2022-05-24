@@ -26,10 +26,13 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from ccbuilder.builder.builder import (Builder, BuildException,
-                                       CompilerBuildJob,
-                                       build_and_install_compiler,
-                                       get_compiler_build_job)
+from ccbuilder.builder.builder import (
+    Builder,
+    BuildException,
+    CompilerBuildJob,
+    build_and_install_compiler,
+    get_compiler_build_job,
+)
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.utils.utils import CompilerConfig
 

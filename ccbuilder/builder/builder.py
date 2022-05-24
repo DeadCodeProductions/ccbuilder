@@ -11,9 +11,13 @@ from types import TracebackType
 from typing import Optional, TextIO
 
 from ccbuilder.patcher.patchdatabase import PatchDB
-from ccbuilder.utils.utils import (Compiler, CompilerConfig,
-                                   get_compiler_config, run_cmd,
-                                   run_cmd_to_logfile)
+from ccbuilder.utils.utils import (
+    Compiler,
+    CompilerConfig,
+    get_compiler_config,
+    run_cmd,
+    run_cmd_to_logfile,
+)
 
 
 class BuildException(Exception):

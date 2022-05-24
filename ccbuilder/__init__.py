@@ -6,10 +6,16 @@ from pathlib import Path
 from subprocess import run
 
 from ccbuilder.builder.builder import (
-    Builder, BuildException, CompilerBuildJob, build_and_install_compiler,
-    get_compiler_build_job, get_compiler_executable_from_job,
+    Builder,
+    BuildException,
+    CompilerBuildJob,
+    build_and_install_compiler,
+    get_compiler_build_job,
+    get_compiler_executable_from_job,
     get_compiler_executable_from_revision_with_config,
-    get_compiler_executable_from_revision_with_name, get_install_path_from_job)
+    get_compiler_executable_from_revision_with_name,
+    get_install_path_from_job,
+)
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
 from ccbuilder.utils.repository import Repo
@@ -183,9 +189,11 @@ def handle_build(args: Namespace, bldr: Builder) -> bool:
     patches = [Path(p.strip()).absolute() for p in args.patches] if args.patches else []
     if args.command == "build":
         cconfig = get_compiler_config(args.compiler, Path(args.repos_dir))
-        print(bldr.build_rev_with_config(
-            cconfig, args.revision.strip(), additional_patches=patches
-        ))
+        print(
+            bldr.build_rev_with_config(
+                cconfig, args.revision.strip(), additional_patches=patches
+            )
+        )
         return True
     return False
 
