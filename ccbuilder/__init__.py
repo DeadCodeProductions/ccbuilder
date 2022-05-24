@@ -1,3 +1,4 @@
+import os
 import logging
 import shlex
 from argparse import ArgumentParser, Namespace
@@ -20,6 +21,7 @@ from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
 from ccbuilder.utils.repository import Repo
 from ccbuilder.utils.utils import Compiler, CompilerConfig, get_compiler_config
+from ccbuilder.builder.builderwithcache import BuilderWithCache
 
 __all__ = [
     "get_compiler_config",
@@ -37,6 +39,7 @@ __all__ = [
     "get_compiler_executable_from_job",
     "get_compiler_executable_from_revision_with_config",
     "get_compiler_executable_from_revision_with_name",
+    "BuilderWithCache",
 ]
 
 _ROOT = Path(__file__).parent.absolute()
@@ -158,6 +161,17 @@ def ccbuilder_patch_parser() -> ArgumentParser:
     return parser
 
 
+def ccbuilder_cache_parser() -> ArgumentParser:
+    parser = ArgumentParser(add_help=False)
+    parser.add_argument(
+        "action",
+        choices=("clean", "stats"),
+        type=str,
+        help="What you want to do with the cache. Clean will search and remove all unfinished cache entries. `stats` will print some statistics about the cache.",
+    )
+    return parser
+
+
 def ccbuilder_parser() -> ArgumentParser:
     """Get the parsers of ccbuilder. Will return you the parent parser
     and the subparser.
@@ -171,6 +185,7 @@ def ccbuilder_parser() -> ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("build", parents=[ccbuilder_build_parser()])
     subparsers.add_parser("patch", parents=[ccbuilder_patch_parser()])
+    subparsers.add_parser("cache", parents=[ccbuilder_cache_parser()])
 
     return parser
 
@@ -219,6 +234,41 @@ def handle_patch(args: Namespace, bldr: Builder, patchdb: PatchDB) -> bool:
     return False
 
 
+def handle_cache(args: Namespace, cache_prefix: Path) -> bool:
+    if args.command == "cache":
+        if args.action == "clean":
+            print("Cleaning...")
+            for c in cache_prefix.iterdir():
+                if c == (cache_prefix / "logs"):
+                    continue
+                if not (c / "DONE").exists():
+                    try:
+                        os.rmdir(c)
+                    except FileNotFoundError:
+                        print(c, "spooky. It just disappeared...")
+                    except OSError:
+                        print(c, "is not empty but also not done!")
+            print("Done")
+        elif args.action == "stats":
+            count_gcc = 0
+            count_clang = 0
+            for c in cache_prefix.iterdir():
+                if c.name.startswith("llvm"):
+                    count_clang += 1
+                else:
+                    count_gcc += 1
+
+            tot = count_gcc + count_clang
+            print("Amount compilers:", tot)
+            print(
+                "Amount clang: {} {:.2f}%".format(count_clang, count_clang / tot * 100)
+            )
+            print("Amount GCC: {} {:.2f}%".format(count_gcc, count_gcc / tot * 100))
+
+        return True
+    return False
+
+
 def run_as_module() -> None:
     args = ccbuilder_parser().parse_args()
     if args.log_level is not None:
@@ -232,10 +282,13 @@ def run_as_module() -> None:
     _initialize(args)
     patchdb = PatchDB(Path(args.patches_dir) / "patchdb.json")
     bldr = Builder(Path(args.prefix.strip()), patchdb)
+    cache_prefix = Path(args.prefix.strip())
 
     if handle_pull(args):
         return
     if handle_build(args, bldr):
         return
     if handle_patch(args, bldr, patchdb):
+        return
+    if handle_cache(args, cache_prefix):
         return
