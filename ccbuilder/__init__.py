@@ -281,7 +281,7 @@ def run_as_module() -> None:
 
     _initialize(args)
     patchdb = PatchDB(Path(args.patches_dir) / "patchdb.json")
-    bldr = Builder(Path(args.prefix.strip()), patchdb)
+    bldr = BuilderWithCache(Path(args.prefix.strip()), patchdb)
     cache_prefix = Path(args.prefix.strip())
 
     if handle_pull(args):
