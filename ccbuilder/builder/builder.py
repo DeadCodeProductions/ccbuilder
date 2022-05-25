@@ -138,7 +138,7 @@ def get_install_path_from_job(job: CompilerBuildJob, prefix: Path) -> Path:
     if job.compiler_config.compiler == Compiler.GCC:
         install_path = prefix / f"gcc-{job.commit_to_build}"
     elif job.compiler_config.compiler == Compiler.LLVM:
-        install_path = prefix / f"llvm-{job.commit_to_build}"
+        install_path = prefix / f"clang-{job.commit_to_build}"
     else:
         raise Exception("Unknown compiler type!")
     return install_path
