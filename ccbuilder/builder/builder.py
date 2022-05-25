@@ -41,6 +41,10 @@ class BuildContext:
         self.build_dir = tempfile.mkdtemp()
         os.makedirs(self.cache_prefix, exist_ok=True)
 
+        # Write worker PID
+        with open(self.cache_prefix / "WORKER_PID", "w") as f:
+            f.write(str(os.getpid()))
+
         self.starting_cwd = os.getcwd()
         os.chdir(self.build_dir)
 
