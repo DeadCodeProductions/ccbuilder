@@ -50,7 +50,11 @@ class BuilderWithCache(Builder):
             )
             start_time = time.time()
             counter = 0
-            while worker_alive(worker_indicator):
+            while (
+                worker_alive(worker_indicator)
+                and not success_indicator.exists()
+                and install_path.exists()
+            ):
                 time.sleep(1)
                 if time.time() - start_time > 15 * 60:
                     counter += 1

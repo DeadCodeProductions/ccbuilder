@@ -68,6 +68,7 @@ class BuildContext:
         self.build_log.close()
         shutil.rmtree(self.build_dir)
         os.chdir(self.starting_cwd)
+        os.remove(self.cache_prefix / "WORKER_PID")
 
         # Build was not successful
         if not self.success_indicator.exists():
