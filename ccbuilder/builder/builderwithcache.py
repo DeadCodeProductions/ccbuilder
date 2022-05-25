@@ -29,11 +29,6 @@ def worker_alive(worker_indicator: Path) -> bool:
 
 
 class BuilderWithCache(Builder):
-    def __init__(
-        self, cache_prefix: Path, patchdb: PatchDB, cores: Optional[int] = None
-    ):
-        super().__init__(cache_prefix, patchdb, cores)
-
     def build_job(
         self, job: CompilerBuildJob, additional_patches: list[Path] = []
     ) -> Path:

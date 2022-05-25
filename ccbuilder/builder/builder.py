@@ -165,12 +165,17 @@ def _run_build_and_install(
 
 
 def build_and_install_compiler(
-    job: CompilerBuildJob, prefix: Path, cores: int, additional_patches: list[Path] = []
+    job: CompilerBuildJob,
+    prefix: Path,
+    cores: int,
+    additional_patches: list[Path] = [],
+    logdir: Optional[Path] = None,
 ) -> Path:
     install_path = get_install_path_from_job(job, prefix)
     success_indicator = install_path / "DONE"
 
-    logdir = prefix / "logs"
+    if not logdir:
+        logdir = prefix / "logs"
     logdir.mkdir(exist_ok=True)
     with BuildContext(install_path, success_indicator, job, logdir) as (
         tmpdir,
@@ -196,16 +201,27 @@ def get_compiler_build_job(
 
 
 class Builder:
-    def __init__(self, prefix: Path, patchdb: PatchDB, cores: Optional[int] = None):
+    def __init__(
+        self,
+        prefix: Path,
+        patchdb: PatchDB,
+        cores: Optional[int] = None,
+        logdir: Optional[Path] = None,
+    ):
         self.prefix = prefix
         self.patchdb = patchdb
         self.cores = cores if cores else multiprocessing.cpu_count()
+        self.logdir = logdir
 
     def build_job(
         self, job: CompilerBuildJob, additional_patches: list[Path] = []
     ) -> Path:
         return build_and_install_compiler(
-            job, self.prefix, self.cores, additional_patches=additional_patches
+            job,
+            self.prefix,
+            self.cores,
+            additional_patches=additional_patches,
+            logdir=self.logdir,
         )
 
     def build_rev_with_config(
