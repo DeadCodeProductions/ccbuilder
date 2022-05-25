@@ -5,7 +5,7 @@ import logging
 import os
 from os.path import join as pjoin
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, TypeVar, Union
+from typing import Any, Callable, TYPE_CHECKING, TypeVar, Union
 
 from ccbuilder.utils.utils import CompilerConfig
 
@@ -25,9 +25,11 @@ def _save_db(func: Callable[..., T]) -> Callable[..., T]:
 
 class PatchDB:
     def __init__(self, path_to_db: Path):
-        self.path = os.path.abspath(path_to_db)
+        self.path = Path(os.path.abspath(path_to_db))
+        self.patch_path_prefix = self.path.parent
+        self.data: dict[str, Any] = {}
         with open(self.path, "r") as f:
-            self.data: dict[str, Any] = json.load(f)
+            self.data = json.load(f)
 
     @_save_db
     def save(self, patch: Path, commits: list[str]) -> None:
@@ -129,7 +131,6 @@ class PatchDB:
         Args:
             self:
             commit (str): commit
-            repo (Repo): repo
 
         Returns:
             list[Path]: List of known required patches.
@@ -138,7 +139,7 @@ class PatchDB:
         required_patches = []
         for patch, patch_commits in self.data.items():
             if commit in patch_commits:
-                required_patches.append(Path(os.path.abspath(pjoin("patches", patch))))
+                required_patches.append(self.patch_path_prefix / patch)
         return required_patches
 
     def requires_this_patch(self, commit: str, patch: Path) -> bool:

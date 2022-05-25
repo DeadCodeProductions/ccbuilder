@@ -37,7 +37,7 @@ class Repo:
         # Could support list of revs...
         if rev == "trunk" or rev == "master" or rev == "main":
             rev = self.main_branch
-        print(f"git -C {self.path} rev-parse {rev}")
+        logging.debug(f"git -C {self.path} rev-parse {rev}")
         return utils.run_cmd(f"git -C {self.path} rev-parse {rev}", capture_output=True)
 
     def rev_to_range_needing_patch(self, introducer: str, fixer: str) -> list[str]:
@@ -212,3 +212,10 @@ class Repo:
         if stderr.startswith("fatal:"):
             return None
         return stdout
+
+    @cache
+    def parent(self, rev: str) -> str:
+        request_str = f"git -C {self.path} rev-parse {rev}^@"
+        res = utils.run_cmd(request_str)
+        assert len(res.split("\n")) == 1
+        return res

@@ -24,16 +24,13 @@ import logging
 import math
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 from ccbuilder.builder.builder import (
-    build_and_install_compiler,
-    get_compiler_build_job,
+    Builder,
     BuildException,
-    CompilerBuildJob,
 )
 from ccbuilder.patcher.patchdatabase import PatchDB
-
 from ccbuilder.utils.utils import CompilerConfig
 
 
@@ -44,10 +41,11 @@ class PatchingResult(Enum):
 
 
 class Patcher:
-    def __init__(self, prefix: Path, patchdb: PatchDB, cores: int):
+    def __init__(self, prefix: Path, patchdb: PatchDB, builder: Builder, cores: int):
         self.prefix = prefix
         self.patchdb = patchdb
         self.cores = cores
+        self.builder = builder
 
     def _build(
         self,
@@ -55,9 +53,8 @@ class Patcher:
         rev: str,
         additional_patches: list[Path] = [],
     ) -> None:
-        build_job = get_compiler_build_job(compiler_config, rev, self.patchdb)
-        build_and_install_compiler(
-            build_job, self.prefix, self.cores, additional_patches
+        self.builder.build_rev_with_config(
+            compiler_config, revision=rev, additional_patches=additional_patches
         )
 
     def _check_building_patches(
@@ -284,7 +281,6 @@ class Patcher:
         """
         introducer = ""
 
-        found_introducer = False
         potentially_human_readable_name = patchable_commit
         patchable_commit = compiler_config.repo.rev_to_commit(patchable_commit)
         patches = [patch.absolute() for patch in patches]
