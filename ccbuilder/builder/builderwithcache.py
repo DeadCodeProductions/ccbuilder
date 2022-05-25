@@ -1,15 +1,15 @@
 import logging
 import time
+from pathlib import Path
+from typing import Optional
+
 from ccbuilder.builder.builder import (
     Builder,
+    BuildException,
     CompilerBuildJob,
     get_install_path_from_job,
-    BuildException,
 )
-
 from ccbuilder.patcher.patchdatabase import PatchDB
-from typing import Optional
-from pathlib import Path
 
 
 class BuilderWithCache(Builder):

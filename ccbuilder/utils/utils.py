@@ -3,11 +3,10 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
-from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Iterator, TextIO
+from typing import TextIO
 
 import ccbuilder.utils.repository as repository
 

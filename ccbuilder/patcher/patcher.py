@@ -24,14 +24,11 @@ import logging
 import math
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 from ccbuilder.builder.builder import (
     Builder,
     BuildException,
-    CompilerBuildJob,
-    build_and_install_compiler,
-    get_compiler_build_job,
 )
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.utils.utils import CompilerConfig
@@ -284,7 +281,6 @@ class Patcher:
         """
         introducer = ""
 
-        found_introducer = False
         potentially_human_readable_name = patchable_commit
         patchable_commit = compiler_config.repo.rev_to_commit(patchable_commit)
         patches = [patch.absolute() for patch in patches]

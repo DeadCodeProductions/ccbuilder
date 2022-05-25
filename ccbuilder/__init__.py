@@ -1,5 +1,5 @@
-import os
 import logging
+import os
 import shlex
 from argparse import ArgumentParser, Namespace
 from multiprocessing import cpu_count
@@ -7,21 +7,21 @@ from pathlib import Path
 from subprocess import run
 
 from ccbuilder.builder.builder import (
+    build_and_install_compiler,
     Builder,
     BuildException,
     CompilerBuildJob,
-    build_and_install_compiler,
     get_compiler_build_job,
     get_compiler_executable_from_job,
     get_compiler_executable_from_revision_with_config,
     get_compiler_executable_from_revision_with_name,
     get_install_path_from_job,
 )
+from ccbuilder.builder.builderwithcache import BuilderWithCache
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
 from ccbuilder.utils.repository import Repo
 from ccbuilder.utils.utils import Compiler, CompilerConfig, get_compiler_config
-from ccbuilder.builder.builderwithcache import BuilderWithCache
 
 __all__ = [
     "get_compiler_config",

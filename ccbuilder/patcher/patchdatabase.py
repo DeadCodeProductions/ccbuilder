@@ -5,7 +5,7 @@ import logging
 import os
 from os.path import join as pjoin
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, TypeVar, Union
+from typing import Any, Callable, TYPE_CHECKING, TypeVar, Union
 
 from ccbuilder.utils.utils import CompilerConfig
 

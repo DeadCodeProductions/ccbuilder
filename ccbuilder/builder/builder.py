@@ -15,7 +15,6 @@ from ccbuilder.utils.utils import (
     Compiler,
     CompilerConfig,
     get_compiler_config,
-    run_cmd,
     run_cmd_to_logfile,
 )
 
