@@ -104,12 +104,13 @@ releases = {
 
 
 def get_compiler_config(compiler_name: str, repo_prefix_path: Path) -> CompilerConfig:
-    assert compiler_name in ["llvm", "gcc"]
+    assert compiler_name in ["clang", "llvm", "gcc"]
     repo_path = repo_prefix_path / ("gcc" if compiler_name == "gcc" else "llvm-project")
     main_branch = "master" if compiler_name == "gcc" else "main"
+    rls = releases["gcc"] if compiler_name == "gcc" else releases["llvm"]
     return CompilerConfig(
         Compiler.GCC if compiler_name == "gcc" else Compiler.LLVM,
         compiler_name,
         repository.Repo(repo_path, main_branch),
-        releases[compiler_name],
+        rls,
     )
