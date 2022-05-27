@@ -176,7 +176,7 @@ class Repo:
     def next_bisection_commit(self, good: str, bad: str) -> str:
         request_str = f"git -C {self.path} rev-list --bisect {bad} ^{good}"
         logging.debug(request_str)
-        return utils.run_cmd(request_str)
+        return utils.run_cmd(request_str, capture_output=True)
 
     def pull(self) -> None:
         """Pulls from the main branch of the repository.
@@ -216,6 +216,6 @@ class Repo:
     @cache
     def parent(self, rev: str) -> str:
         request_str = f"git -C {self.path} rev-parse {rev}^@"
-        res = utils.run_cmd(request_str)
+        res = utils.run_cmd(request_str, capture_output=True)
         assert len(res.split("\n")) == 1
         return res
