@@ -54,11 +54,14 @@ class CompilerConfig:
 
 releases = {
     "gcc": [
+        "releases/gcc-12.1.0",
+        "releases/gcc-11.3.0",
         "releases/gcc-11.2.0",
         "releases/gcc-11.1.0",
         "releases/gcc-10.3.0",
         "releases/gcc-10.2.0",
         "releases/gcc-10.1.0",
+        "releases/gcc-9.5.0",
         "releases/gcc-9.4.0",
         "releases/gcc-9.3.0",
         "releases/gcc-9.2.0",
@@ -74,6 +77,9 @@ releases = {
         "releases/gcc-7.2.0",
     ],
     "llvm": [
+        "llvmorg-14.0.4",
+        "llvmorg-14.0.3",
+        "llvmorg-14.0.2",
         "llvmorg-14.0.1",
         "llvmorg-14.0.0",
         "llvmorg-13.0.1",
