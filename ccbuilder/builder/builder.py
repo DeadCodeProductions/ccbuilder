@@ -50,9 +50,9 @@ class BuildContext:
 
         # Build log file
         current_time = time.strftime("%Y%m%d-%H%M%S")
+        name = "gcc" if self.job.compiler_config.name == "gcc" else "clang"
         build_log_path = (
-            self.logdir
-            / f"{current_time}-{self.job.compiler_config.name}-{self.job.commit_to_build}.log"
+            self.logdir / f"{current_time}-{name}-{self.job.commit_to_build}.log"
         )
         self.build_log = open(build_log_path, "a")
         logging.info(f"Build log at {build_log_path}")
