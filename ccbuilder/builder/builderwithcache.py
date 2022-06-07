@@ -33,7 +33,7 @@ class BuilderWithCache(Builder):
         self, job: CompilerBuildJob, additional_patches: list[Path] = []
     ) -> Path:
 
-        install_path = get_install_path_from_job(job, self.prefix)
+        install_path = get_install_path_from_job(job, self.cache_prefix)
         success_indicator = install_path / "DONE"
         worker_indicator = install_path / "WORKER_PID"
         if success_indicator.exists():
