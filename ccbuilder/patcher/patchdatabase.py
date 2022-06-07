@@ -64,85 +64,92 @@ class PatchDB:
         # Make entries unique
         self.data[patch_basename] = list(set(self.data[patch_basename]))
 
-    # @_save_db
-    # def save_bad(
-    # self,
-    # patches: list[Path],
-    # commit: str,
-    # compiler_config: NestedNamespace,
-    # ) -> None:
-    # logging.debug(f"Saving bad: {compiler_config.name} {commit} {patches}")
-    # patches_str = [str(os.path.basename(patch)) for patch in patches]
+    # TODO: make a user friendly variant before using it in ccbuilder
+    @_save_db
+    def save_bad(
+        self,
+        patches: list[Path],
+        commit: str,
+        compiler_config: CompilerConfig,
+    ) -> None:
+        logging.debug(
+            f"Saving bad: {compiler_config.compiler.to_string()} {commit} {patches}"
+        )
+        patches_str = [str(os.path.basename(patch)) for patch in patches]
 
-    # if "bad" not in self.data:
-    # self.data["bad"] = {}
+        if "bad" not in self.data:
+            self.data["bad"] = {}
 
-    # if compiler_config.name not in self.data["bad"]:
-    # self.data["bad"][compiler_config.name] = {}
+        if compiler_config.compiler.to_string() not in self.data["bad"]:
+            self.data["bad"][compiler_config.compiler.to_string()] = {}
 
-    # if commit not in self.data["bad"][compiler_config.name]:
-    # self.data["bad"][compiler_config.name][commit] = []
+        if commit not in self.data["bad"][compiler_config.compiler.to_string()]:
+            self.data["bad"][compiler_config.compiler.to_string()][commit] = []
 
-    # self.data["bad"][compiler_config.name][commit].append(patches_str)
+        self.data["bad"][compiler_config.compiler.to_string()][commit].append(
+            patches_str
+        )
 
-    # @_save_db
-    # def clear_bad(
-    # self,
-    # patches: list[Path],
-    # commit: str,
-    # compiler_config: NestedNamespace,
-    # ) -> None:
-    # logging.debug(f"Clearing bad: {compiler_config.name} {commit} {patches}")
-    # patches_str = [str(os.path.basename(patch)) for patch in patches]
+    @_save_db
+    def clear_bad(
+        self,
+        patches: list[Path],
+        commit: str,
+        compiler_config: CompilerConfig,
+    ) -> None:
+        logging.debug(
+            f"Clearing bad: {compiler_config.compiler.to_string()} {commit} {patches}"
+        )
+        patches_str = [str(os.path.basename(patch)) for patch in patches]
 
-    # if (
-    # "bad" not in self.data
-    # or compiler_config.name not in self.data["bad"]
-    # or commit not in self.data["bad"][compiler_config.name]
-    # ):
-    # return
+        if (
+            "bad" not in self.data
+            or compiler_config.compiler.to_string() not in self.data["bad"]
+            or commit not in self.data["bad"][compiler_config.compiler.to_string()]
+        ):
+            return
 
-    # good_hash = hash("".join(patches_str))
-    # list_bad = self.data["bad"][compiler_config.name][commit]
-    # list_bad = [combo for combo in list_bad if hash("".join(combo)) != good_hash]
+        good_hash = hash("".join(patches_str))
+        list_bad = self.data["bad"][compiler_config.compiler.to_string()][commit]
+        list_bad = [combo for combo in list_bad if hash("".join(combo)) != good_hash]
 
-    # self.data["bad"][compiler_config.name][commit] = list_bad
+        self.data["bad"][compiler_config.compiler.to_string()][commit] = list_bad
 
-    # def is_known_bad(
-    # self,
-    # patches: list[Path],
-    # commit: str,
-    # compiler_config: NestedNamespace,
-    # ) -> bool:
-    # """Checks if a given compiler-commit-patches combination
-    # has already been tested and failed to build.
+    def is_known_bad(
+        self,
+        patches: list[Path],
+        commit: str,
+        compiler_config: CompilerConfig,
+    ) -> bool:
+        """Checks if a given compiler-commit-patches combination
+        has already been tested and failed to build.
 
-    # Args:
-    # self:
-    # patches (list[Path]): patches
-    # commit (str): commit
-    # compiler_config (NestedNamespace): compiler_config
+        Args:
+        self:
+        patches (list[Path]): patches
+        commit (str): commit
+        compiler_config (NestedNamespace): compiler_config
 
-    # Returns:
-    # bool:
-    # """
-    # patches_str = [str(os.path.basename(patch)) for patch in patches]
+        Returns:
+        bool:
+        """
+        patches_str = [str(os.path.basename(patch)) for patch in patches]
 
-    # if "bad" not in self.data:
-    # return False
+        if "bad" not in self.data:
+            return False
 
-    # if compiler_config.name not in self.data["bad"]:
-    # return False
+        if compiler_config.compiler.to_string() not in self.data["bad"]:
+            return False
 
-    # if commit not in self.data["bad"][compiler_config.name]:
-    # return False
+        if commit not in self.data["bad"][compiler_config.compiler.to_string()]:
+            return False
 
-    # current_hash = hash("".join(patches_str))
-    # for known_bad in self.data["bad"][compiler_config.name][commit]:
-    # if current_hash == hash("".join(sorted(known_bad))):
-    # return True
+        current_hash = hash("".join(patches_str))
+        for known_bad in self.data["bad"][compiler_config.compiler.to_string()][commit]:
+            if current_hash == hash("".join(sorted(known_bad))):
+                return True
 
-    # return False
+        return False
 
     def required_patches(self, commit: str) -> list[Path]:
         """Get the known required patches form the database.
@@ -188,8 +195,10 @@ class PatchDB:
         self.data["manual"].append(f"{compiler_config.compiler.to_string()} {rev}")
         self.data["manual"] = list(set(self.data["manual"]))
 
-    # def in_manual(self, compiler_config: NestedNamespace, rev: str) -> bool:
-    # if "manual" not in self.data:
-    # return False
-    # else:
-    # return f"{compiler_config.name} {rev}" in self.data["manual"]
+    def in_manual(self, compiler_config: CompilerConfig, rev: str) -> bool:
+        if "manual" not in self.data:
+            return False
+        else:
+            return (
+                f"{compiler_config.compiler.to_string()} {rev}" in self.data["manual"]
+            )
