@@ -21,7 +21,12 @@ from ccbuilder.builder.builderwithcache import BuilderWithCache
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
 from ccbuilder.utils.repository import Repo
-from ccbuilder.utils.utils import Compiler, CompilerConfig, get_compiler_config, CompilerReleases
+from ccbuilder.utils.utils import (
+    Compiler,
+    CompilerConfig,
+    get_compiler_config,
+    CompilerReleases,
+)
 
 __all__ = [
     "get_compiler_config",
@@ -40,7 +45,7 @@ __all__ = [
     "get_compiler_executable_from_revision_with_config",
     "get_compiler_executable_from_revision_with_name",
     "BuilderWithCache",
-    "CompilerReleases"
+    "CompilerReleases",
 ]
 
 _ROOT = Path(__file__).parent.absolute()
@@ -98,7 +103,7 @@ def ccbuilder_base_parser() -> ArgumentParser:
     )
     default_prefix = str(Path.home() / ".cache" / "ccbuilder-compilers")
     parser.add_argument(
-        "--prefix",
+        "--cache-prefix",
         type=str,
         default=default_prefix,
         help=f"Installation prefix (default: {default_prefix})",
@@ -193,8 +198,10 @@ def ccbuilder_parser() -> ArgumentParser:
 
 def handle_pull(args: Namespace) -> bool:
     if args.pull:
-        cconfig_gcc = get_compiler_config("gcc", Path(args.repos_dir))
-        cconfig_llvm = get_compiler_config("llvm", Path(args.repos_dir))
+        cconfig_gcc = get_compiler_config("gcc", Path(args.repos_dir) / "gcc")
+        cconfig_llvm = get_compiler_config(
+            "llvm", Path(args.repos_dir) / "llvm-project"
+        )
         cconfig_gcc.repo.pull()
         cconfig_llvm.repo.pull()
         return True
@@ -222,7 +229,7 @@ def handle_patch(args: Namespace, bldr: Builder, patchdb: PatchDB) -> bool:
         )
         cconfig = get_compiler_config(args.compiler, Path(args.repos_dir))
         patcher = Patcher(
-            Path(args.prefix),
+            Path(args.cache_prefix),
             patchdb=patchdb,
             cores=args.jobs,
             builder=bldr,
@@ -283,8 +290,8 @@ def run_as_module() -> None:
 
     _initialize(args)
     patchdb = PatchDB(Path(args.patches_dir) / "patchdb.json")
-    bldr = BuilderWithCache(Path(args.prefix.strip()), patchdb)
-    cache_prefix = Path(args.prefix.strip())
+    bldr = BuilderWithCache(Path(args.cache_prefix.strip()), patchdb)
+    cache_prefix = Path(args.cache_prefix.strip())
 
     if handle_pull(args):
         return

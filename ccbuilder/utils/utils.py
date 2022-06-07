@@ -42,7 +42,7 @@ def run_cmd_to_logfile(
 class Compiler(Enum):
     GCC = 0
     LLVM = 1
-    
+
     def to_string(self) -> str:
         return "gcc" if self == Compiler.GCC else "clang"
 
@@ -110,12 +110,10 @@ CompilerReleases = {
 }
 
 
-# TODO: Don't assume the double repo
-def get_compiler_config(compiler_name: str, repo_prefix_path: Path) -> CompilerConfig:
+def get_compiler_config(compiler_name: str, repo_path: Path) -> CompilerConfig:
     assert compiler_name in ["clang", "llvm", "gcc"]
 
     compiler = Compiler.GCC if compiler_name == "gcc" else Compiler.LLVM
-    repo_path = repo_prefix_path / ("gcc" if compiler_name == "gcc" else "llvm-project")
     main_branch = "master" if compiler_name == "gcc" else "main"
     return CompilerConfig(
         compiler,
