@@ -203,12 +203,12 @@ def get_compiler_build_job(
 class Builder:
     def __init__(
         self,
-        prefix: Path,
+        cache_prefix: Path,
         patchdb: PatchDB,
         cores: Optional[int] = None,
         logdir: Optional[Path] = None,
     ):
-        self.prefix = prefix
+        self.cache_prefix = cache_prefix
         self.patchdb = patchdb
         self.cores = cores if cores else multiprocessing.cpu_count()
         self.logdir = logdir
@@ -218,7 +218,7 @@ class Builder:
     ) -> Path:
         return build_and_install_compiler(
             job,
-            self.prefix,
+            self.cache_prefix,
             self.cores,
             additional_patches=additional_patches,
             logdir=self.logdir,
@@ -238,7 +238,7 @@ class Builder:
     def build_rev_with_name(
         self, compiler_name: str, revision: str, additional_patches: list[Path] = []
     ) -> Path:
-        compiler_config = get_compiler_config(compiler_name, self.prefix)
+        compiler_config = get_compiler_config(compiler_name, self.cache_prefix)
         return self.build_rev_with_config(
             compiler_config, revision=revision, additional_patches=additional_patches
         )
@@ -264,7 +264,7 @@ def get_compiler_executable_from_revision_with_config(
 def get_compiler_executable_from_revision_with_name(
     compiler_name: str, revision: str, bldr: Builder
 ) -> Path:
-    compiler_config = get_compiler_config(compiler_name, bldr.prefix)
+    compiler_config = get_compiler_config(compiler_name, bldr.cache_prefix)
     return get_compiler_executable_from_revision_with_config(
         compiler_config, revision, bldr
     )
