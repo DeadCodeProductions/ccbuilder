@@ -24,8 +24,27 @@ def _save_db(func: Callable[..., T]) -> Callable[..., T]:
 
 
 class PatchDB:
-    def __init__(self, path_to_db: Path):
-        self.path = Path(os.path.abspath(path_to_db))
+    def __init__(
+        self,
+        path_to_db: Path = Path.home()
+        / ".cache"
+        / "ccbuilder-patches"
+        / "patchdb.json",
+    ):
+        default = Path.home() / ".cache" / "ccbuilder-patches" / "patchdb.json"
+        if path_to_db == default:
+            if not path_to_db.exists():
+                from shutil import copy
+
+                logging.warning(
+                    f"Missing default patch database. Recreating it at {default}..."
+                )
+                os.makedirs(path_to_db.parent, exist_ok=True)
+                for entry in (Path(__file__).parent.parent / "patches").iterdir():
+                    if not (default.parent / entry.name).exists():
+                        copy(entry, default.parent / entry.name)
+
+        self.path = path_to_db.absolute()
         self.patch_path_prefix = self.path.parent
         self.data: dict[str, Any] = {}
         with open(self.path, "r") as f:
