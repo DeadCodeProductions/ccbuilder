@@ -21,7 +21,7 @@ from ccbuilder.builder.builderwithcache import BuilderWithCache
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
 from ccbuilder.utils.repository import Repo
-from ccbuilder.utils.utils import Compiler, CompilerConfig, get_compiler_config
+from ccbuilder.utils.utils import Compiler, CompilerConfig, get_compiler_config, CompilerReleases
 
 __all__ = [
     "get_compiler_config",
@@ -40,6 +40,7 @@ __all__ = [
     "get_compiler_executable_from_revision_with_config",
     "get_compiler_executable_from_revision_with_name",
     "BuilderWithCache",
+    "CompilerReleases"
 ]
 
 _ROOT = Path(__file__).parent.absolute()
@@ -201,6 +202,7 @@ def handle_pull(args: Namespace) -> bool:
 
 
 def handle_build(args: Namespace, bldr: Builder) -> bool:
+    # TODO: handle separate repo inputs?
     patches = [Path(p.strip()).absolute() for p in args.patches] if args.patches else []
     if args.command == "build":
         cconfig = get_compiler_config(args.compiler, Path(args.repos_dir))
