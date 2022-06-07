@@ -204,12 +204,13 @@ class Builder:
     def __init__(
         self,
         cache_prefix: Path,
-        patchdb: PatchDB,
+        patchdb: Optional[PatchDB] = None,
         cores: Optional[int] = None,
         logdir: Optional[Path] = None,
     ):
         self.cache_prefix = cache_prefix
-        self.patchdb = patchdb
+        pdb = patchdb if patchdb else PatchDB()
+        self.patchdb = pdb
         self.cores = cores if cores else multiprocessing.cpu_count()
         self.logdir = logdir
 
