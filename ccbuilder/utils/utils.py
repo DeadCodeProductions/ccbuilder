@@ -119,3 +119,11 @@ def get_compiler_config(compiler_name: str, repo_path: Path) -> CompilerConfig:
         compiler,
         repository.Repo(repo_path, main_branch),
     )
+
+
+def get_repo(compiler: Compiler, path_to_repo: Path) -> repository.Repo:
+    match compiler:
+        case Compiler.LLVM:
+            return repository.Repo.llvm_repo(path_to_repo)
+        case Compiler.GCC:
+            return repository.Repo.llvm_repo(path_to_repo)

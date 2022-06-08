@@ -26,6 +26,7 @@ from ccbuilder.utils.utils import (
     CompilerConfig,
     get_compiler_config,
     CompilerReleases,
+    get_repo,
 )
 
 __all__ = [
@@ -46,6 +47,7 @@ __all__ = [
     "get_compiler_executable_from_revision_with_name",
     "BuilderWithCache",
     "CompilerReleases",
+    "get_repo",
 ]
 
 _ROOT = Path(__file__).parent.absolute()

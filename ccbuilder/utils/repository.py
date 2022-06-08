@@ -219,3 +219,11 @@ class Repo:
         res = utils.run_cmd(request_str, capture_output=True)
         assert len(res.split("\n")) == 1
         return res
+
+    @staticmethod
+    def llvm_repo(path_to_repo: Path) -> Repo:
+        return Repo(path_to_repo, "main")
+
+    @staticmethod
+    def gcc_repo(path_to_repo: Path) -> Repo:
+        return Repo(path_to_repo, "master")
