@@ -4,7 +4,7 @@ jobs:
   mypy:
     runs-on: ubuntu-latest
     container:
-      image: python:3.9
+      image: python:3.10
     steps:
       - uses: actions/checkout@v2
       - run: pip3 install mypy
