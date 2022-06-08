@@ -21,7 +21,12 @@ from ccbuilder.builder.builderwithcache import BuilderWithCache
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
 from ccbuilder.utils.repository import Repo
-from ccbuilder.utils.utils import Compiler, CompilerConfig, get_compiler_config
+from ccbuilder.utils.utils import (
+    Compiler,
+    CompilerConfig,
+    get_compiler_config,
+    get_repo,
+)
 
 __all__ = [
     "get_compiler_config",
@@ -40,6 +45,7 @@ __all__ = [
     "get_compiler_executable_from_revision_with_config",
     "get_compiler_executable_from_revision_with_name",
     "BuilderWithCache",
+    "get_repo",
 ]
 
 _ROOT = Path(__file__).parent.absolute()
