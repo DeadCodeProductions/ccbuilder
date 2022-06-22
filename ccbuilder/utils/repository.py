@@ -14,13 +14,17 @@ class RepositoryException(Exception):
     pass
 
 
+Revision = str
+Commit = str
+
+
 class Repo:
     def __init__(self, path: Path, main_branch: str):
         self.path = os.path.abspath(path)
         self.main_branch = main_branch
 
     @cache
-    def get_best_common_ancestor(self, rev_a: str, rev_b: str) -> str:
+    def get_best_common_ancestor(self, rev_a: Revision, rev_b: Revision) -> Commit:
         a = self.rev_to_commit(rev_a)
         b = self.rev_to_commit(rev_b)
         return utils.run_cmd(
@@ -28,7 +32,7 @@ class Repo:
         )
 
     @cache
-    def rev_to_commit(self, rev: str) -> str:
+    def rev_to_commit(self, rev: Revision) -> Commit:
         """Convert any revision (commits, tags etc.) into their
         SHA1 hash via git rev-parse.
 
@@ -49,7 +53,9 @@ class Repo:
         except subprocess.CalledProcessError as e:
             raise RepositoryException(e)
 
-    def rev_to_range_needing_patch(self, introducer: str, fixer: str) -> list[str]:
+    def rev_to_range_needing_patch(
+        self, introducer: Revision, fixer: Revision
+    ) -> list[Commit]:
         """
         This function's aim is best described with a picture
            O---------P
@@ -112,7 +118,9 @@ class Repo:
         except subprocess.CalledProcessError as e:
             raise RepositoryException(e)
 
-    def direct_first_parent_path(self, older: str, younger: str) -> list[str]:
+    def direct_first_parent_path(
+        self, older: Revision, younger: Revision
+    ) -> list[Commit]:
         cmd = f"git -C {self.path} rev-list --first-parent {younger} ^{older}"
         try:
             res = [
@@ -124,7 +132,7 @@ class Repo:
         except subprocess.CalledProcessError as e:
             raise RepositoryException(e)
 
-    def rev_to_commit_list(self, rev: str) -> list[str]:
+    def rev_to_commit_list(self, rev: Revision) -> list[Commit]:
         try:
             return utils.run_cmd(
                 f"git -C {self.path} log --format=%H {rev}", capture_output=True
@@ -132,7 +140,7 @@ class Repo:
         except subprocess.CalledProcessError as e:
             raise RepositoryException(e)
 
-    def is_ancestor(self, rev_old: str, rev_young: str) -> bool:
+    def is_ancestor(self, rev_old: Revision, rev_young: Revision) -> bool:
         rev_old = self.rev_to_commit(rev_old)
         rev_young = self.rev_to_commit(rev_young)
 
@@ -145,7 +153,9 @@ class Repo:
         )
         return process.returncode == 0
 
-    def is_branch_point_ancestor_wrt_master(self, rev_old: str, rev_young: str) -> bool:
+    def is_branch_point_ancestor_wrt_master(
+        self, rev_old: Revision, rev_young: Revision
+    ) -> bool:
         rev_old = self.rev_to_commit(rev_old)
         rev_young = self.rev_to_commit(rev_young)
         rev_master = self.rev_to_commit("master")
@@ -154,7 +164,7 @@ class Repo:
 
         return self.is_ancestor(ca_old, ca_young)
 
-    def on_same_branch_wrt_master(self, rev_a: str, rev_b: str) -> bool:
+    def on_same_branch_wrt_master(self, rev_a: Revision, rev_b: Revision) -> bool:
         rev_a = self.rev_to_commit(rev_a)
         rev_b = self.rev_to_commit(rev_b)
         rev_master = self.rev_to_commit("master")
@@ -164,7 +174,7 @@ class Repo:
 
         return ca_b == ca_a
 
-    def get_unix_timestamp(self, rev: str) -> int:
+    def get_unix_timestamp(self, rev: Revision) -> int:
         rev = self.rev_to_commit(rev)
         try:
             return int(
@@ -203,7 +213,7 @@ class Repo:
 
         return returncode == 0
 
-    def next_bisection_commit(self, good: str, bad: str) -> str:
+    def next_bisection_commit(self, good: Revision, bad: Revision) -> Commit:
         request_str = f"git -C {self.path} rev-list --bisect {bad} ^{good}"
         logging.debug(request_str)
         try:
@@ -236,7 +246,7 @@ class Repo:
             raise RepositoryException(e)
 
     @cache
-    def rev_to_tag(self, rev: str) -> Optional[str]:
+    def rev_to_tag(self, rev: Revision) -> Optional[Commit]:
         request_str = f"git -C {self.path} describe --exact-match {rev}"
         logging.debug(request_str)
         output = subprocess.run(
@@ -250,7 +260,7 @@ class Repo:
         return stdout
 
     @cache
-    def parent(self, rev: str) -> str:
+    def parent(self, rev: Revision) -> Commit:
         request_str = f"git -C {self.path} rev-parse {rev}^@"
         try:
             res = utils.run_cmd(request_str, capture_output=True)
