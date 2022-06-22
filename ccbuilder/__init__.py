@@ -19,7 +19,7 @@ from ccbuilder.builder.builder import (
 from ccbuilder.builder.builderwithcache import BuilderWithCache
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
-from ccbuilder.utils.repository import Repo
+from ccbuilder.utils.repository import Repo, RepositoryException
 from ccbuilder.utils.utils import (
     Compiler,
     CompilerConfig,
@@ -33,6 +33,7 @@ __all__ = [
     "CompilerConfig",
     "Compiler",
     "Repo",
+    "RepositoryException",
     "PatchDB",
     "Patcher",
     "get_compiler_build_job",
@@ -290,14 +291,23 @@ def run_as_module() -> None:
 
     _initialize(args)
     patchdb = PatchDB(Path(args.patches_dir) / "patchdb.json")
-    bldr = BuilderWithCache(Path(args.cache_prefix.strip()), patchdb)
     cache_prefix = Path(args.cache_prefix.strip())
 
     if handle_pull(args):
         return
+    if handle_cache(args, cache_prefix):
+        return
+    repo_dir_prefix = Path(args.repos_dir)
+    llvm_repo = get_repo(Compiler.LLVM, repo_dir_prefix / "llvm-project")
+    gcc_repo = get_repo(Compiler.LLVM, repo_dir_prefix / "gcc")
+
+    bldr = BuilderWithCache(
+        Path(args.cache_prefix.strip()),
+        gcc_repo=gcc_repo,
+        llvm_repo=llvm_repo,
+        patchdb=patchdb,
+    )
     if handle_build(args, bldr):
         return
     if handle_patch(args, bldr, patchdb):
-        return
-    if handle_cache(args, cache_prefix):
         return
