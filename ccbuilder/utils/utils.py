@@ -126,4 +126,4 @@ def get_repo(compiler: Compiler, path_to_repo: Path) -> repository.Repo:
         case Compiler.LLVM:
             return repository.Repo.llvm_repo(path_to_repo)
         case Compiler.GCC:
-            return repository.Repo.llvm_repo(path_to_repo)
+            return repository.Repo.gcc_repo(path_to_repo)
