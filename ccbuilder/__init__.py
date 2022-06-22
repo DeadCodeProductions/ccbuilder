@@ -14,7 +14,6 @@ from ccbuilder.builder.builder import (
     get_compiler_build_job,
     get_compiler_executable_from_job,
     get_compiler_executable_from_revision_with_config,
-    get_compiler_executable_from_revision_with_name,
     get_install_path_from_job,
 )
 from ccbuilder.builder.builderwithcache import BuilderWithCache
@@ -44,7 +43,6 @@ __all__ = [
     "BuildException",
     "get_compiler_executable_from_job",
     "get_compiler_executable_from_revision_with_config",
-    "get_compiler_executable_from_revision_with_name",
     "BuilderWithCache",
     "get_repo",
     "CompilerReleases",
