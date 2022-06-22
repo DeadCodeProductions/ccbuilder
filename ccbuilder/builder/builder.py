@@ -260,12 +260,3 @@ def get_compiler_executable_from_revision_with_config(
         compiler_config, revision=revision, patchdb=bldr.patchdb
     )
     return get_compiler_executable_from_job(job, bldr)
-
-
-def get_compiler_executable_from_revision_with_name(
-    compiler_name: str, revision: str, bldr: Builder
-) -> Path:
-    compiler_config = get_compiler_config(compiler_name, bldr.cache_prefix)
-    return get_compiler_executable_from_revision_with_config(
-        compiler_config, revision, bldr
-    )
