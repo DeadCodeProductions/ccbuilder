@@ -10,6 +10,10 @@ from typing import Optional
 import ccbuilder.utils.utils as utils
 
 
+class RepositoryException(Exception):
+    pass
+
+
 class Repo:
     def __init__(self, path: Path, main_branch: str):
         self.path = os.path.abspath(path)
@@ -35,10 +39,15 @@ class Repo:
             str: Hash of `rev` in this repo.
         """
         # Could support list of revs...
-        if rev == "trunk" or rev == "master" or rev == "main":
-            rev = self.main_branch
-        logging.debug(f"git -C {self.path} rev-parse {rev}")
-        return utils.run_cmd(f"git -C {self.path} rev-parse {rev}", capture_output=True)
+        try:
+            if rev == "trunk" or rev == "master" or rev == "main":
+                rev = self.main_branch
+            logging.debug(f"git -C {self.path} rev-parse {rev}")
+            return utils.run_cmd(
+                f"git -C {self.path} rev-parse {rev}", capture_output=True
+            )
+        except subprocess.CalledProcessError as e:
+            raise RepositoryException(e)
 
     def rev_to_range_needing_patch(self, introducer: str, fixer: str) -> list[str]:
         """
@@ -64,14 +73,23 @@ class Repo:
         #
 
         # Get all commits with at least 2 parents
-        merges_after_introducer = utils.run_cmd(
-            f"git -C {self.path} rev-list --merges {introducer}~..{fixer}",
-            capture_output=True,
-        )
+        try:
+            merges_after_introducer = utils.run_cmd(
+                f"git -C {self.path} rev-list --merges {introducer}~..{fixer}",
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RepositoryException(e)
+
         if len(merges_after_introducer) > 0:
             # Get all parent commits of these (so for C it would be H, Z and R)
             cmd = f"git -C {self.path} rev-parse " + "^@ ".join(merges_after_introducer)
-            merger_parents = set(utils.run_cmd(cmd, capture_output=True).split("\n"))
+            try:
+                merger_parents = set(
+                    utils.run_cmd(cmd, capture_output=True).split("\n")
+                )
+            except subprocess.CalledProcessError as e:
+                raise RepositoryException(e)
 
             # Remove all parents which are child of the requested commit
             unwanted_merger_parents = [
@@ -84,26 +102,35 @@ class Repo:
         cmd = f"git -C {self.path} rev-list {fixer} ^{introducer} " + " ^".join(
             unwanted_merger_parents
         )
-        res = [
-            commit
-            for commit in utils.run_cmd(cmd, capture_output=True).split("\n")
-            if commit != ""
-        ] + [introducer]
-        return res
+        try:
+            res = [
+                commit
+                for commit in utils.run_cmd(cmd, capture_output=True).split("\n")
+                if commit != ""
+            ] + [introducer]
+            return res
+        except subprocess.CalledProcessError as e:
+            raise RepositoryException(e)
 
     def direct_first_parent_path(self, older: str, younger: str) -> list[str]:
         cmd = f"git -C {self.path} rev-list --first-parent {younger} ^{older}"
-        res = [
-            commit
-            for commit in utils.run_cmd(cmd, capture_output=True).split("\n")
-            if commit != ""
-        ] + [older]
-        return res
+        try:
+            res = [
+                commit
+                for commit in utils.run_cmd(cmd, capture_output=True).split("\n")
+                if commit != ""
+            ] + [older]
+            return res
+        except subprocess.CalledProcessError as e:
+            raise RepositoryException(e)
 
     def rev_to_commit_list(self, rev: str) -> list[str]:
-        return utils.run_cmd(
-            f"git -C {self.path} log --format=%H {rev}", capture_output=True
-        ).split("\n")
+        try:
+            return utils.run_cmd(
+                f"git -C {self.path} log --format=%H {rev}", capture_output=True
+            ).split("\n")
+        except subprocess.CalledProcessError as e:
+            raise RepositoryException(e)
 
     def is_ancestor(self, rev_old: str, rev_young: str) -> bool:
         rev_old = self.rev_to_commit(rev_old)
@@ -139,12 +166,15 @@ class Repo:
 
     def get_unix_timestamp(self, rev: str) -> int:
         rev = self.rev_to_commit(rev)
-        return int(
-            utils.run_cmd(
-                f"git -C {self.path} log -1 --format=%at {rev}",
-                capture_output=True,
+        try:
+            return int(
+                utils.run_cmd(
+                    f"git -C {self.path} log -1 --format=%at {rev}",
+                    capture_output=True,
+                )
             )
-        )
+        except subprocess.CalledProcessError as e:
+            raise RepositoryException(e)
 
     def apply(self, patches: list[Path], check: bool = False) -> bool:
         patches = [patch.absolute() for patch in patches]
@@ -176,7 +206,10 @@ class Repo:
     def next_bisection_commit(self, good: str, bad: str) -> str:
         request_str = f"git -C {self.path} rev-list --bisect {bad} ^{good}"
         logging.debug(request_str)
-        return utils.run_cmd(request_str, capture_output=True)
+        try:
+            return utils.run_cmd(request_str, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            raise RepositoryException(e)
 
     def pull(self) -> None:
         """Pulls from the main branch of the repository.
@@ -194,10 +227,13 @@ class Repo:
         self.get_best_common_ancestor.cache_clear()
         self.rev_to_tag.cache_clear()
         # Just in case...
-        cmd = f"git -C {self.path} switch {self.main_branch}"
-        utils.run_cmd(cmd)
-        cmd = f"git -C {self.path} pull"
-        utils.run_cmd(cmd)
+        cmd0 = f"git -C {self.path} switch {self.main_branch}"
+        cmd1 = f"git -C {self.path} pull"
+        try:
+            utils.run_cmd(cmd0)
+            utils.run_cmd(cmd1)
+        except subprocess.CalledProcessError as e:
+            raise RepositoryException(e)
 
     @cache
     def rev_to_tag(self, rev: str) -> Optional[str]:
@@ -216,7 +252,11 @@ class Repo:
     @cache
     def parent(self, rev: str) -> str:
         request_str = f"git -C {self.path} rev-parse {rev}^@"
-        res = utils.run_cmd(request_str, capture_output=True)
+        try:
+            res = utils.run_cmd(request_str, capture_output=True)
+        except subprocess.SubprocessError as e:
+            raise RepositoryException(e)
+
         assert len(res.split("\n")) == 1
         return res
 
