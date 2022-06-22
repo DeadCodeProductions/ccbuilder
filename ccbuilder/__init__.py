@@ -19,7 +19,7 @@ from ccbuilder.builder.builder import (
 from ccbuilder.builder.builderwithcache import BuilderWithCache
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
-from ccbuilder.utils.repository import Repo, RepositoryException
+from ccbuilder.utils.repository import Repo, RepositoryException, Revision, Commit
 from ccbuilder.utils.utils import (
     Compiler,
     CompilerConfig,
@@ -34,6 +34,8 @@ __all__ = [
     "Compiler",
     "Repo",
     "RepositoryException",
+    "Revision",
+    "Commit",
     "PatchDB",
     "Patcher",
     "get_compiler_build_job",
