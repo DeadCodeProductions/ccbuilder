@@ -31,7 +31,8 @@ from ccbuilder.builder.builder import (
     BuildException,
 )
 from ccbuilder.patcher.patchdatabase import PatchDB
-from ccbuilder.utils.utils import CompilerConfig, CompilerReleases
+from ccbuilder.utils.utils import CompilerReleases, CompilerProject
+from ccbuilder.utils.repository import Repo, Commit
 
 
 class PatchingResult(Enum):
@@ -49,26 +50,25 @@ class Patcher:
 
     def _build(
         self,
-        compiler_config: CompilerConfig,
+        project: CompilerProject,
         rev: str,
         additional_patches: list[Path] = [],
     ) -> None:
-        self.builder.build_rev_with_config(
-            compiler_config, revision=rev, additional_patches=additional_patches
-        )
+        self.builder.build(project, rev=rev, additional_patches=additional_patches)
 
     def _check_building_patches(
         self,
-        compiler_config: CompilerConfig,
+        project: CompilerProject,
+        repo: Repo,
         rev: str,
         patches: list[Path],
     ) -> PatchingResult:
         if not self.patchdb.requires_all_these_patches(
-            compiler_config.repo.rev_to_commit(rev), patches
+            repo.rev_to_commit(rev), patches
         ):
             try:
                 logging.info(f"Building {rev} without patches {patches}...")
-                self._build(compiler_config, rev)
+                self._build(project, rev)
                 return PatchingResult.BuildsWithoutPatching
 
             except BuildException as e:
@@ -76,14 +76,14 @@ class Patcher:
 
             try:
                 logging.info(f"Building {rev} WITH patches {patches}...")
-                self._build(compiler_config, rev, additional_patches=patches)
+                self._build(project, rev, additional_patches=patches)
                 return PatchingResult.BuildsWithPatching
 
             except BuildException as e:
                 logging.critical(
                     f"Failed to build {rev} with patches {patches}. Manual intervention needed. Exception: {e}"
                 )
-                self.patchdb.manual_intervention_required(compiler_config, rev)
+                self.patchdb.manual_intervention_required(project, rev)
                 return PatchingResult.BuildFailed
         else:
             logging.info(f"Read form PatchDB: {rev} requires patches {patches}")
@@ -91,13 +91,15 @@ class Patcher:
 
     def _adjust_bisection_midpoint_after_failure(
         self,
-        compiler_config: CompilerConfig,
+        project: CompilerProject,
+        repo: Repo,
         double_fail_counter: int,
         max_double_fail: int,
         bad: str,
         midpoint: str,
         good: str,
     ) -> str:
+        # TODO Update docs
         """
         Move the midpoint either forwards or backwards (depending on the double_fail_counter)
 
@@ -113,27 +115,24 @@ class Patcher:
         # midpoint forwards and backwards?
         if double_fail_counter % 2 == 0:
             # Get size of range
-            range_size = len(
-                compiler_config.repo.direct_first_parent_path(midpoint, bad)
-            )
+            range_size = len(repo.direct_first_parent_path(midpoint, bad))
 
             # Move 10% towards the last bad
             step = max(int(0.9 * range_size), 1)
-            midpoint = compiler_config.repo.rev_to_commit(f"{bad}~{step}")
+            midpoint = repo.rev_to_commit(f"{bad}~{step}")
         else:
             # Symmetric to case above
-            range_size = len(
-                compiler_config.repo.direct_first_parent_path(good, midpoint)
-            )
+            range_size = len(repo.direct_first_parent_path(good, midpoint))
             step = max(int(0.2 * range_size), 1)
-            midpoint = compiler_config.repo.rev_to_commit(f"{midpoint}~{step}")
+            midpoint = repo.rev_to_commit(f"{midpoint}~{step}")
         return midpoint
 
     def _bisection(
         self,
         good_rev: str,
         bad_rev: str,
-        compiler_config: CompilerConfig,
+        project: CompilerProject,
+        repo: Repo,
         patches: list[Path],
         failure_is_good: bool = False,
         max_double_fail: int = 2,
@@ -149,11 +148,12 @@ class Patcher:
         encountered_double_fail = False
 
         # Bisection
-        midpoint = ""
+        midpoint: str = ""
         while True:
             if encountered_double_fail:
                 midpoint = self._adjust_bisection_midpoint_after_failure(
-                    compiler_config,
+                    project,
+                    repo,
                     double_fail_counter,
                     max_double_fail,
                     bad,
@@ -164,15 +164,13 @@ class Patcher:
                 encountered_double_fail = False
             else:
                 old_midpoint = midpoint
-                midpoint = compiler_config.repo.next_bisection_commit(
-                    good=good, bad=bad
-                )
+                midpoint = repo.next_bisection_commit(good=good, bad=bad)
                 logging.info(f"Midpoint: {midpoint}")
                 if midpoint == "" or midpoint == old_midpoint:
                     break
 
             patching_result = self._check_building_patches(
-                compiler_config, midpoint, patches
+                project, repo, midpoint, patches
             )
 
             if patching_result is PatchingResult.BuildFailed:
@@ -188,11 +186,13 @@ class Patcher:
 
     def _find_oldest_ancestor_not_needing_patches_and_oldest_patchable_from_releases(
         self,
-        compiler_config: CompilerConfig,
+        project: CompilerProject,
+        repo: Repo,
         patchable_commit: str,
         potentially_human_readable_name: str,
         patches: list[Path],
     ) -> tuple[Optional[str], Optional[str]]:
+        # TODO UPdate docs
         """
         Find two oldest common ancestors of patchable_commit and one of the releases:
             (1) that doesn't need the patch(es)
@@ -202,16 +202,16 @@ class Patcher:
         # For now, just assume this is sorted in descending release-recency
         # Using commit dates doesn't really work
         # TODO: do something with `from packaging import version; version.parse()`
-        release_versions = ["trunk"] + CompilerReleases[compiler_config.compiler]
+        release_versions = ["trunk"] + CompilerReleases[project]
         release_versions.reverse()
 
-        tested_ancestors = []
+        tested_ancestors: list[Commit] = []
         no_patch_common_ancestor = None
         oldest_patchable_ancestor = None
         for old_version in release_versions:
 
             logging.info(f"Testing for {old_version}")
-            if not compiler_config.repo.is_branch_point_ancestor_wrt_master(
+            if not repo.is_branch_point_ancestor_wrt_master(
                 old_version, patchable_commit
             ):
                 if oldest_patchable_ancestor:
@@ -225,7 +225,7 @@ class Patcher:
                     "No buildable-version was found before patchable_commit!"
                 )
 
-            common_ancestor = compiler_config.repo.get_best_common_ancestor(
+            common_ancestor = repo.get_best_common_ancestor(
                 old_version, patchable_commit
             )
             # TODO: Check that common_ancestor is ancestor of master.
@@ -239,7 +239,7 @@ class Patcher:
 
             # Building of releases
             patching_result = self._check_building_patches(
-                compiler_config, common_ancestor, patches
+                project, repo, common_ancestor, patches
             )
 
             if patching_result is PatchingResult.BuildsWithoutPatching:
@@ -256,10 +256,12 @@ class Patcher:
 
     def find_ranges(
         self,
-        compiler_config: CompilerConfig,
+        project: CompilerProject,
+        repo: Repo,
         patchable_commit: str,
         patches: list[Path],
     ) -> None:
+        # TODO UPdate docs
         """Given a compiler, a revision of the compiler that normally does not build
         and the set of patches needed to fix this particular revision,
         find the continuous region on the commit history which requires all these
@@ -282,7 +284,7 @@ class Patcher:
         introducer = ""
 
         potentially_human_readable_name = patchable_commit
-        patchable_commit = compiler_config.repo.rev_to_commit(patchable_commit)
+        patchable_commit = repo.rev_to_commit(patchable_commit)
         patches = [patch.absolute() for patch in patches]
         for patch in patches:
             if not Path(patch).exists():
@@ -292,7 +294,8 @@ class Patcher:
             no_patch_common_ancestor,
             oldest_patchable_ancestor,
         ) = self._find_oldest_ancestor_not_needing_patches_and_oldest_patchable_from_releases(
-            compiler_config,
+            project,
+            repo,
             patchable_commit,
             potentially_human_readable_name,
             patches,
@@ -315,43 +318,47 @@ class Patcher:
             _, introducer = self._bisection(
                 no_patch_common_ancestor,
                 patchable_commit,
-                compiler_config,
+                project,
+                repo,
                 patches,
             )
 
             # Insert from introducer to and with patchable_commit as requiring patching
             # This is of course not the complete range but will help when bisecting
             rev_range = f"{introducer}~..{patchable_commit}"
-            commit_list = compiler_config.repo.rev_to_commit_list(rev_range)
+            commit_list = repo.rev_to_commit_list(rev_range)
             for patch in patches:
-                self.patchdb.save(patch, commit_list, compiler_config.repo)
+                self.patchdb.save(patch, commit_list, repo)
 
             self.find_fixer_from_introducer_to_releases(
                 introducer=introducer,
-                compiler_config=compiler_config,
+                project=project,
+                repo=repo,
                 patches=patches,
             )
 
         elif oldest_patchable_ancestor:
             self.find_fixer_from_introducer_to_releases(
                 introducer=oldest_patchable_ancestor,
-                compiler_config=compiler_config,
+                project=project,
+                repo=repo,
                 patches=patches,
             )
 
     def find_fixer_from_introducer_to_releases(
         self,
         introducer: str,
-        compiler_config: CompilerConfig,
+        project: CompilerProject,
+        repo: Repo,
         patches: list[Path],
     ) -> None:
         logging.info(f"Starting bisection of fixer commits from {introducer}...")
 
         # Find reachable releases
         reachable_releases = [
-            compiler_config.repo.rev_to_commit(release)
-            for release in CompilerReleases[compiler_config.compiler]
-            if compiler_config.repo.is_ancestor(introducer, release)
+            repo.rev_to_commit(release)
+            for release in CompilerReleases[project]
+            if repo.is_ancestor(introducer, release)
         ]
 
         last_needing_patch_list: list[str] = []
@@ -359,7 +366,7 @@ class Patcher:
             logging.info(f"Searching fixer for release {release}")
 
             patching_result = self._check_building_patches(
-                compiler_config, release, patches
+                project, repo, release, patches
             )
 
             # Check if any of already found fixers is ancestor of release
@@ -370,7 +377,7 @@ class Patcher:
                 and patching_result.BuildsWithoutPatching
                 and any(
                     [
-                        compiler_config.repo.is_ancestor(fixer, release)
+                        repo.is_ancestor(fixer, release)
                         for fixer in last_needing_patch_list
                     ]
                 )
@@ -383,11 +390,9 @@ class Patcher:
 
             elif patching_result is PatchingResult.BuildsWithPatching:
                 # release only builds with patch, everything to release is to be included
-                commits = compiler_config.repo.rev_to_commit_list(
-                    f"{introducer}~1..{release}"
-                )
+                commits = repo.rev_to_commit_list(f"{introducer}~1..{release}")
                 for patch in patches:
-                    self.patchdb.save(patch, commits, compiler_config.repo)
+                    self.patchdb.save(patch, commits, repo)
                 continue
 
             elif patching_result is PatchingResult.BuildsWithoutPatching:
@@ -396,22 +401,21 @@ class Patcher:
                 last_needing_patch, _ = self._bisection(
                     introducer,
                     release,
-                    compiler_config,
+                    project,
+                    repo,
                     patches,
                     failure_is_good=True,
                 )
 
                 last_needing_patch_list.append(last_needing_patch)
-                range_needing_patching = (
-                    compiler_config.repo.rev_to_range_needing_patch(
-                        introducer, last_needing_patch
-                    )
+                range_needing_patching = repo.rev_to_range_needing_patch(
+                    introducer, last_needing_patch
                 )
                 for patch in patches:
                     self.patchdb.save(
                         patch,
                         range_needing_patching,
-                        compiler_config.repo,
+                        repo,
                     )
 
         logging.info("Done finding fixers")
@@ -420,9 +424,11 @@ class Patcher:
         self,
         good: str,
         bad: str,
-        compiler_config: CompilerConfig,
+        project: CompilerProject,
+        repo: Repo,
         failure_is_good: bool = False,
     ) -> tuple[str, str]:
+        # TODO UPdate docs
         """Bisect w.r.t. building and not building.
 
         Args:
@@ -439,7 +445,7 @@ class Patcher:
 
         while True:
             old_midpoint = midpoint
-            midpoint = compiler_config.repo.next_bisection_commit(good=good, bad=bad)
+            midpoint = repo.next_bisection_commit(good=good, bad=bad)
             logging.info(f"Midpoint: {midpoint}")
             if midpoint == "" or midpoint == old_midpoint:
                 break
@@ -447,7 +453,7 @@ class Patcher:
             # ==================== BUILDING ====================
             try:
                 logging.info(f"Building midpoint {midpoint}...")
-                self._build(compiler_config, midpoint)
+                self._build(project, midpoint)
                 if failure_is_good:
                     bad = midpoint
                 else:
@@ -464,7 +470,10 @@ class Patcher:
 
         return (good, bad)
 
-    def find_introducer(self, compiler_config: CompilerConfig, broken_rev: str) -> str:
+    def find_introducer(
+        self, project: CompilerProject, repo: Repo, broken_rev: str
+    ) -> str:
+        # TODO UPdate docs
         """Given a broken commit, find the commit that introduced the build failure.
 
         Args:
@@ -476,8 +485,8 @@ class Patcher:
         """
         logging.info(f"Looking for introducer commit starting at {broken_rev}")
 
-        oldest_possible_commit = compiler_config.repo.get_best_common_ancestor(
-            CompilerReleases[compiler_config.compiler][-1], "main"
+        oldest_possible_commit = repo.get_best_common_ancestor(
+            CompilerReleases[project][-1], "main"
         )
 
         # === Introducer
@@ -489,12 +498,8 @@ class Patcher:
         current_commit = broken_rev
         while True:
             prev_commit = current_commit
-            current_commit = compiler_config.repo.rev_to_commit(
-                broken_rev + f"~{2**exp + 10}"
-            )
-            is_ancestor = compiler_config.repo.is_ancestor(
-                oldest_possible_commit, current_commit
-            )
+            current_commit = repo.rev_to_commit(broken_rev + f"~{2**exp + 10}")
+            is_ancestor = repo.is_ancestor(oldest_possible_commit, current_commit)
             if hit_upper_bound:
                 msg = (
                     f"Couldn't find buildable ancestor for broken revision {broken_rev}"
@@ -508,7 +513,7 @@ class Patcher:
 
             try:
                 logging.info(f"Building {current_commit} in search of buildable one")
-                self._build(compiler_config, current_commit)
+                self._build(project, current_commit)
                 break
             except BuildException as e:
                 exp += 1
@@ -523,7 +528,8 @@ class Patcher:
         _, introducer = self.bisect_build(
             good=current_commit,
             bad=prev_commit,
-            compiler_config=compiler_config,
+            project=project,
+            repo=repo,
             failure_is_good=False,
         )
         msg = f"Found introducer {introducer}"

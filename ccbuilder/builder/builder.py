@@ -11,11 +11,11 @@ from types import TracebackType
 from typing import Optional, TextIO
 
 from ccbuilder.patcher.patchdatabase import PatchDB
+from ccbuilder.utils.repository import Repo, Revision, Commit
 from ccbuilder.utils.utils import (
-    Compiler,
-    CompilerConfig,
-    get_compiler_config,
+    CompilerProject,
     run_cmd_to_logfile,
+    select_repo,
 )
 
 
@@ -24,17 +24,11 @@ class BuildException(Exception):
 
 
 @dataclass
-class CompilerBuildJob:
-    compiler_config: CompilerConfig
-    commit_to_build: str
-    patchdb: PatchDB
-
-
-@dataclass
 class BuildContext:
     cache_prefix: Path
     success_indicator: Path
-    job: CompilerBuildJob
+    project: CompilerProject
+    commit_to_build: Commit
     logdir: Path
 
     def __enter__(self) -> tuple[Path, TextIO]:
@@ -50,9 +44,9 @@ class BuildContext:
 
         # Build log file
         current_time = time.strftime("%Y%m%d-%H%M%S")
-        name = self.job.compiler_config.compiler.to_string()
+        name = self.project.to_string()
         build_log_path = (
-            self.logdir / f"{current_time}-{name}-{self.job.commit_to_build}.log"
+            self.logdir / f"{current_time}-{name}-{self.commit_to_build}.log"
         )
         self.build_log = open(build_log_path, "a")
         logging.info(f"Build log at {build_log_path}")
@@ -99,18 +93,21 @@ def apply_patches(git_dir: Path, patches: list[Path]) -> bool:
 
 
 def patch_if_necessary(
-    job: CompilerBuildJob, working_dir: Path, additional_patches: list[Path] = []
+    commit_to_patch: Commit,
+    patchdb: PatchDB,
+    working_dir: Path,
+    additional_patches: list[Path] = [],
 ) -> None:
-    patches = job.patchdb.required_patches(job.commit_to_build) + additional_patches
+    patches = patchdb.required_patches(commit_to_patch) + additional_patches
     if patches:
         if not apply_patches(working_dir, patches):
             raise BuildException(f"Could not apply patches: {patches}")
 
 
-def llvm_build_and_install(prefix: Path, cores: int, log_file: TextIO) -> None:
+def llvm_build_and_install(install_prefix: Path, cores: int, log_file: TextIO) -> None:
     os.chdir("build")
     logging.debug("LLVM: Starting cmake")
-    cmake_cmd = f"cmake ../llvm -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS=clang -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_USE_NEWPM=ON -DLLVM_TARGETS_TO_BUILD=X86 -DCMAKE_INSTALL_PREFIX={prefix} -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON"
+    cmake_cmd = f"cmake ../llvm -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS=clang -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_USE_NEWPM=ON -DLLVM_TARGETS_TO_BUILD=X86 -DCMAKE_INSTALL_PREFIX={install_prefix} -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON"
 
     run_cmd_to_logfile(
         cmake_cmd, additional_env={"CC": "clang", "CXX": "clang++"}, log_file=log_file
@@ -120,7 +117,7 @@ def llvm_build_and_install(prefix: Path, cores: int, log_file: TextIO) -> None:
     run_cmd_to_logfile(f"ninja -j {cores} install", log_file=log_file)
 
 
-def gcc_build_and_install(prefix: Path, cores: int, log_file: TextIO) -> None:
+def gcc_build_and_install(install_prefix: Path, cores: int, log_file: TextIO) -> None:
     pre_cmd = "./contrib/download_prerequisites"
     logging.debug("GCC: Starting download_prerequisites")
     run_cmd_to_logfile(pre_cmd, log_file=log_file)
@@ -129,7 +126,7 @@ def gcc_build_and_install(prefix: Path, cores: int, log_file: TextIO) -> None:
     logging.debug("GCC: Starting configure")
     configure_cmd = (
         "../configure --disable-multilib --disable-bootstrap"
-        f" --enable-languages=c,c++ --prefix={prefix}"
+        f" --enable-languages=c,c++ --prefix={install_prefix}"
     )
     run_cmd_to_logfile(configure_cmd, log_file=log_file)
 
@@ -138,125 +135,202 @@ def gcc_build_and_install(prefix: Path, cores: int, log_file: TextIO) -> None:
     run_cmd_to_logfile("make install-strip", log_file=log_file)
 
 
-def get_install_path_from_job(job: CompilerBuildJob, prefix: Path) -> Path:
-    if job.compiler_config.compiler == Compiler.GCC:
-        install_path = prefix / f"gcc-{job.commit_to_build}"
-    elif job.compiler_config.compiler == Compiler.LLVM:
-        install_path = prefix / f"clang-{job.commit_to_build}"
-    else:
-        raise Exception("Unknown compiler type!")
-    return install_path
-
-
 def _run_build_and_install(
-    job: CompilerBuildJob, prefix: Path, cores: int, log_file: TextIO
+    project: CompilerProject, install_path: Path, cores: int, log_file: TextIO
 ) -> Path:
     os.makedirs("build")
-    install_path = get_install_path_from_job(job, prefix)
     try:
-        if job.compiler_config.compiler == Compiler.GCC:
-            gcc_build_and_install(install_path, cores, log_file)
-        else:
-            assert job.compiler_config.compiler == Compiler.LLVM
-            llvm_build_and_install(install_path, cores, log_file)
+        match project:
+            case CompilerProject.GCC:
+                gcc_build_and_install(install_path, cores, log_file)
+            case CompilerProject.LLVM:
+                llvm_build_and_install(install_path, cores, log_file)
     except subprocess.CalledProcessError as e:
         raise BuildException(f"Build failed: {e}")
     return install_path
 
 
+def get_install_path(
+    cache_prefix: Path, project: CompilerProject, commit: Commit
+) -> Path:
+    match project:
+        case CompilerProject.LLVM:
+            install_name_prefix = "clang"
+        case CompilerProject.GCC:
+            install_name_prefix = "gcc"
+    return cache_prefix / f"{install_name_prefix}-{commit}"
+
+
+def get_executable_postfix(project: CompilerProject) -> Path:
+    match project:
+        case CompilerProject.LLVM:
+            executable_name = "clang"
+        case CompilerProject.GCC:
+            executable_name = "gcc"
+    return Path("bin") / executable_name
+
+
 def build_and_install_compiler(
-    job: CompilerBuildJob,
-    prefix: Path,
-    cores: int,
-    additional_patches: list[Path] = [],
+    project: CompilerProject,
+    rev: Revision,
+    cache_prefix: Path,
+    llvm_repo: Repo,
+    gcc_repo: Repo,
+    patchdb: PatchDB,
+    get_executable: bool = False,
+    jobs: Optional[int] = None,
+    additional_patches: Optional[list[Path]] = None,
     logdir: Optional[Path] = None,
 ) -> Path:
-    install_path = get_install_path_from_job(job, prefix)
+
+    repo = select_repo(project, llvm_repo, gcc_repo)
+    commit = repo.rev_to_commit(rev)
+    install_path = get_install_path(cache_prefix, project, commit)
     success_indicator = install_path / "DONE"
 
     if not logdir:
-        logdir = prefix / "logs"
+        logdir = cache_prefix / "logs"
     logdir.mkdir(exist_ok=True)
-    with BuildContext(install_path, success_indicator, job, logdir) as (
+    with BuildContext(cache_prefix, success_indicator, project, commit, logdir) as (
         tmpdir,
         build_log,
     ):
         run_cmd_to_logfile(
-            f"git -C {str(job.compiler_config.repo.path)} worktree"
-            f" add {tmpdir} {job.commit_to_build} -f",
+            f"git -C {str(repo.path)} worktree" f" add {tmpdir} {commit} -f",
             log_file=build_log,
         )
-        patch_if_necessary(job, Path(tmpdir), additional_patches)
-        res = _run_build_and_install(job, prefix, cores, build_log)
+        patch_if_necessary(
+            commit,
+            patchdb,
+            Path(tmpdir),
+            additional_patches if additional_patches else [],
+        )
+        res = _run_build_and_install(
+            project,
+            install_path,
+            jobs if jobs else multiprocessing.cpu_count(),
+            build_log,
+        )
         success_indicator.touch()
+        if get_executable:
+            return res / get_executable_postfix(project)
         return res
 
 
-def get_compiler_build_job(
-    compiler_config: CompilerConfig, revision: str, patchdb: PatchDB
-) -> CompilerBuildJob:
-    return CompilerBuildJob(
-        compiler_config, compiler_config.repo.rev_to_commit(revision), patchdb
-    )
-
-
-class Builder:
+class BuilderWithoutCache:
     def __init__(
         self,
         cache_prefix: Path,
+        gcc_repo: Repo,
+        llvm_repo: Repo,
         patchdb: Optional[PatchDB] = None,
-        cores: Optional[int] = None,
+        jobs: Optional[int] = None,
         logdir: Optional[Path] = None,
     ):
         self.cache_prefix = cache_prefix
+        self.gcc_repo = gcc_repo
+        self.llvm_repo = llvm_repo
+
         pdb = patchdb if patchdb else PatchDB()
         self.patchdb = pdb
-        self.cores = cores if cores else multiprocessing.cpu_count()
+        self.jobs = jobs if jobs else multiprocessing.cpu_count()
         self.logdir = logdir
 
-    def build_job(
-        self, job: CompilerBuildJob, additional_patches: list[Path] = []
+    def build(
+        self,
+        project: CompilerProject,
+        rev: Revision,
+        get_executable: bool = False,
+        additional_patches: Optional[list[Path]] = None,
+        jobs: Optional[int] = None,
     ) -> Path:
+        if not jobs and not self.jobs:
+            jobs = multiprocessing.cpu_count()
+        elif not jobs:
+            jobs = self.jobs
+
         return build_and_install_compiler(
-            job,
-            self.cache_prefix,
-            self.cores,
+            project=project,
+            rev=rev,
+            cache_prefix=self.cache_prefix,
+            llvm_repo=self.llvm_repo,
+            gcc_repo=self.gcc_repo,
+            patchdb=self.patchdb,
+            get_executable=get_executable,
+            jobs=jobs,
             additional_patches=additional_patches,
             logdir=self.logdir,
         )
 
-    def build_rev_with_config(
+
+def worker_alive(worker_indicator: Path) -> bool:
+    if worker_indicator.exists():
+        with open(worker_indicator, "r") as f:
+            worker_pid = int(f.read())
+        try:
+            # Signal to ~check if a process is alive
+            # from man 1 kill
+            # > If signal is 0, then no actual signal is sent, but error checking is still performed.
+            os.kill(worker_pid, 0)
+            return True
+        except OSError:
+            return False
+    return False
+
+
+class Builder(BuilderWithoutCache):
+    def build(
         self,
-        compiler_config: CompilerConfig,
-        revision: str,
-        additional_patches: list[Path] = [],
+        project: CompilerProject,
+        rev: str,
+        get_executable: bool = False,
+        additional_patches: Optional[list[Path]] = None,
+        jobs: Optional[int] = None,
+        force: bool = False,
     ) -> Path:
-        job = get_compiler_build_job(
-            compiler_config, revision=revision, patchdb=self.patchdb
+
+        repo = select_repo(project, self.llvm_repo, self.gcc_repo)
+        commit = repo.rev_to_commit(rev)
+        install_path = get_install_path(self.cache_prefix, project, commit)
+        success_indicator = install_path / "DONE"
+        worker_indicator = install_path / "WORKER_PID"
+
+        postfix: Path = get_executable_postfix(project) if get_executable else Path()
+
+        if not force:
+            if success_indicator.exists():
+                return install_path / postfix
+            elif install_path.exists() and worker_alive(worker_indicator):
+
+                logging.info(
+                    f"This compiler seems to be built by some other worker. Need to wait. If there is no other worker, abort this command and run ccbuilder cache clean."
+                )
+                start_time = time.time()
+                counter = 0
+                while (
+                    worker_alive(worker_indicator)
+                    and not success_indicator.exists()
+                    and install_path.exists()
+                ):
+                    time.sleep(1)
+                    if time.time() - start_time > 15 * 60:
+                        counter += 1
+                        logging.info(
+                            f"{counter*15} minutes have passed waiting. Maybe the cache is in an inconsistent state."
+                        )
+                        start_time = time.time()
+
+                if success_indicator.exists():
+                    return install_path / postfix
+
+                # Someone was building but did not leave the success_indicator
+                # so something went wrong with the build.
+                raise BuildException(f"Other build attempt failed for {install_path}")
+
+        return super().build(
+            project,
+            rev,
+            get_executable=get_executable,
+            additional_patches=additional_patches,
+            jobs=jobs,
         )
-        return self.build_job(job, additional_patches=additional_patches)
-
-    def build_rev_with_name(
-        self, compiler_name: str, revision: str, additional_patches: list[Path] = []
-    ) -> Path:
-        compiler_config = get_compiler_config(compiler_name, self.cache_prefix)
-        return self.build_rev_with_config(
-            compiler_config, revision=revision, additional_patches=additional_patches
-        )
-
-
-def get_compiler_executable_from_job(job: CompilerBuildJob, bldr: Builder) -> Path:
-    base = bldr.build_job(job)
-    if job.compiler_config.compiler == Compiler.GCC:
-        return base / "bin" / "gcc"
-    else:
-        return base / "bin" / "clang"
-
-
-def get_compiler_executable_from_revision_with_config(
-    compiler_config: CompilerConfig, revision: str, bldr: Builder
-) -> Path:
-    job = get_compiler_build_job(
-        compiler_config, revision=revision, patchdb=bldr.patchdb
-    )
-    return get_compiler_executable_from_job(job, bldr)
