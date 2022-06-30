@@ -270,10 +270,12 @@ class Repo:
         assert len(res.split("\n")) == 1
         return res
 
+    @cache
     @staticmethod
     def llvm_repo(path_to_repo: Path) -> Repo:
         return Repo(path_to_repo, "main")
 
+    @cache
     @staticmethod
     def gcc_repo(path_to_repo: Path) -> Repo:
         return Repo(path_to_repo, "master")

@@ -3,11 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-from os.path import join as pjoin
 from pathlib import Path
-from typing import Any, Callable, TYPE_CHECKING, TypeVar, Union
+from typing import Any, Callable, TypeVar
 
-from ccbuilder.utils.utils import CompilerConfig
+from ccbuilder.utils.utils import CompilerProject
 
 T = TypeVar("T")
 
@@ -70,56 +69,50 @@ class PatchDB:
         self,
         patches: list[Path],
         commit: str,
-        compiler_config: CompilerConfig,
+        project: CompilerProject,
     ) -> None:
-        logging.debug(
-            f"Saving bad: {compiler_config.compiler.to_string()} {commit} {patches}"
-        )
+        logging.debug(f"Saving bad: {project.to_string()} {commit} {patches}")
         patches_str = [str(os.path.basename(patch)) for patch in patches]
 
         if "bad" not in self.data:
             self.data["bad"] = {}
 
-        if compiler_config.compiler.to_string() not in self.data["bad"]:
-            self.data["bad"][compiler_config.compiler.to_string()] = {}
+        if project.to_string() not in self.data["bad"]:
+            self.data["bad"][project.to_string()] = {}
 
-        if commit not in self.data["bad"][compiler_config.compiler.to_string()]:
-            self.data["bad"][compiler_config.compiler.to_string()][commit] = []
+        if commit not in self.data["bad"][project.to_string()]:
+            self.data["bad"][project.to_string()][commit] = []
 
-        self.data["bad"][compiler_config.compiler.to_string()][commit].append(
-            patches_str
-        )
+        self.data["bad"][project.to_string()][commit].append(patches_str)
 
     @_save_db
     def clear_bad(
         self,
         patches: list[Path],
         commit: str,
-        compiler_config: CompilerConfig,
+        project: CompilerProject,
     ) -> None:
-        logging.debug(
-            f"Clearing bad: {compiler_config.compiler.to_string()} {commit} {patches}"
-        )
+        logging.debug(f"Clearing bad: {project.to_string()} {commit} {patches}")
         patches_str = [str(os.path.basename(patch)) for patch in patches]
 
         if (
             "bad" not in self.data
-            or compiler_config.compiler.to_string() not in self.data["bad"]
-            or commit not in self.data["bad"][compiler_config.compiler.to_string()]
+            or project.to_string() not in self.data["bad"]
+            or commit not in self.data["bad"][project.to_string()]
         ):
             return
 
         good_hash = hash("".join(patches_str))
-        list_bad = self.data["bad"][compiler_config.compiler.to_string()][commit]
+        list_bad = self.data["bad"][project.to_string()][commit]
         list_bad = [combo for combo in list_bad if hash("".join(combo)) != good_hash]
 
-        self.data["bad"][compiler_config.compiler.to_string()][commit] = list_bad
+        self.data["bad"][project.to_string()][commit] = list_bad
 
     def is_known_bad(
         self,
         patches: list[Path],
         commit: str,
-        compiler_config: CompilerConfig,
+        project: CompilerProject,
     ) -> bool:
         """Checks if a given compiler-commit-patches combination
         has already been tested and failed to build.
@@ -138,14 +131,14 @@ class PatchDB:
         if "bad" not in self.data:
             return False
 
-        if compiler_config.compiler.to_string() not in self.data["bad"]:
+        if project.to_string() not in self.data["bad"]:
             return False
 
-        if commit not in self.data["bad"][compiler_config.compiler.to_string()]:
+        if commit not in self.data["bad"][project.to_string()]:
             return False
 
         current_hash = hash("".join(patches_str))
-        for known_bad in self.data["bad"][compiler_config.compiler.to_string()][commit]:
+        for known_bad in self.data["bad"][project.to_string()][commit]:
             if current_hash == hash("".join(sorted(known_bad))):
                 return True
 
@@ -162,7 +155,7 @@ class PatchDB:
             list[Path]: List of known required patches.
         """
 
-        required_patches = []
+        required_patches: list[Path] = []
         for patch, patch_commits in self.data.items():
             if commit in patch_commits:
                 required_patches.append(self.patch_path_prefix / patch)
@@ -186,19 +179,15 @@ class PatchDB:
             )
 
     @_save_db
-    def manual_intervention_required(
-        self, compiler_config: CompilerConfig, rev: str
-    ) -> None:
+    def manual_intervention_required(self, project: CompilerProject, rev: str) -> None:
         if "manual" not in self.data:
             self.data["manual"] = []
 
-        self.data["manual"].append(f"{compiler_config.compiler.to_string()} {rev}")
+        self.data["manual"].append(f"{project.to_string()} {rev}")
         self.data["manual"] = list(set(self.data["manual"]))
 
-    def in_manual(self, compiler_config: CompilerConfig, rev: str) -> bool:
+    def in_manual(self, project: CompilerProject, rev: str) -> bool:
         if "manual" not in self.data:
             return False
         else:
-            return (
-                f"{compiler_config.compiler.to_string()} {rev}" in self.data["manual"]
-            )
+            return f"{project.to_string()} {rev}" in self.data["manual"]
