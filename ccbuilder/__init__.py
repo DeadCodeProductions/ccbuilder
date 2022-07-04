@@ -23,6 +23,7 @@ from ccbuilder.utils.utils import (
     get_compiler_info,
     get_compiler_project,
     find_cached_revisions,
+    select_repo,
 )
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "CompilerReleases",
     "MajorCompilerReleases",
     "get_repo",
+    "select_repo",
     "find_cached_revisions",
     "get_compiler_info",
     "get_compiler_project",
