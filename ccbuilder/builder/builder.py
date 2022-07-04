@@ -16,6 +16,7 @@ from ccbuilder.utils.utils import (
     CompilerProject,
     run_cmd_to_logfile,
     select_repo,
+    get_compiler_project,
 )
 
 
@@ -333,4 +334,22 @@ class Builder(BuilderWithoutCache):
             get_executable=get_executable,
             additional_patches=additional_patches,
             jobs=jobs,
+        )
+
+    def build_name(
+        self,
+        name: str,
+        rev: str,
+        get_executable: bool = False,
+        additional_patches: Optional[list[Path]] = None,
+        jobs: Optional[int] = None,
+        force: bool = False,
+    ) -> Path:
+        return self.build(
+            get_compiler_project(name),
+            rev=rev,
+            get_executable=get_executable,
+            additional_patches=additional_patches,
+            jobs=jobs,
+            force=force,
         )
