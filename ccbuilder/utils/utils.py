@@ -52,6 +52,8 @@ def get_repo(project: CompilerProject, path_to_repo: Path) -> repository.Repo:
             return repository.Repo.llvm_repo(path_to_repo)
         case CompilerProject.GCC:
             return repository.Repo.gcc_repo(path_to_repo)
+        case _:
+            raise Exception("Unreachable")
 
 
 def select_repo(
