@@ -166,7 +166,7 @@ class PatchDB:
         if "manual" not in self.data:
             self.data["manual"] = []
 
-        self.data["manual"].append(f"{compiler_config.name} {rev}")
+        self.data["manual"].append(f"{compiler_config.compiler.to_string()} {rev}")
         self.data["manual"] = list(set(self.data["manual"]))
 
     # def in_manual(self, compiler_config: NestedNamespace, rev: str) -> bool:

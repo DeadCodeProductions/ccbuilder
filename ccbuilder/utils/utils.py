@@ -42,18 +42,19 @@ def run_cmd_to_logfile(
 class Compiler(Enum):
     GCC = 0
     LLVM = 1
+    
+    def to_string(self) -> str:
+        return "gcc" if self == Compiler.GCC else "clang"
 
 
 @dataclass
 class CompilerConfig:
     compiler: Compiler
-    name: str
     repo: repository.Repo
-    releases: list[str]
 
 
-releases = {
-    "gcc": [
+CompilerReleases = {
+    Compiler.GCC: [
         "releases/gcc-12.1.0",
         "releases/gcc-11.3.0",
         "releases/gcc-11.2.0",
@@ -76,7 +77,7 @@ releases = {
         "releases/gcc-7.3.0",
         "releases/gcc-7.2.0",
     ],
-    "llvm": [
+    Compiler.LLVM: [
         "llvmorg-14.0.4",
         "llvmorg-14.0.3",
         "llvmorg-14.0.2",
@@ -109,16 +110,16 @@ releases = {
 }
 
 
+# TODO: Don't assume the double repo
 def get_compiler_config(compiler_name: str, repo_prefix_path: Path) -> CompilerConfig:
     assert compiler_name in ["clang", "llvm", "gcc"]
+
+    compiler = Compiler.GCC if compiler_name == "gcc" else Compiler.LLVM
     repo_path = repo_prefix_path / ("gcc" if compiler_name == "gcc" else "llvm-project")
     main_branch = "master" if compiler_name == "gcc" else "main"
-    rls = releases["gcc"] if compiler_name == "gcc" else releases["llvm"]
     return CompilerConfig(
-        Compiler.GCC if compiler_name == "gcc" else Compiler.LLVM,
-        compiler_name,
+        compiler,
         repository.Repo(repo_path, main_branch),
-        rls,
     )
 
 
