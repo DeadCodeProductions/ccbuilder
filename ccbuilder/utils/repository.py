@@ -214,7 +214,9 @@ class Repo:
         return returncode == 0
 
     def next_bisection_commit(self, good: Revision, bad: Revision) -> Commit:
-        request_str = f"git -C {self.path} rev-list --bisect {bad} ^{good}"
+        request_str = (
+            f"git -C {self.path} rev-list --bisect --first-parent {bad} ^{good}"
+        )
         logging.debug(request_str)
         try:
             return utils.run_cmd(request_str, capture_output=True)
