@@ -26,7 +26,7 @@ class BuildException(Exception):
 
 @dataclass
 class BuildContext:
-    cache_prefix: Path
+    install_prefix: Path
     success_indicator: Path
     project: CompilerProject
     commit_to_build: Commit
@@ -34,10 +34,10 @@ class BuildContext:
 
     def __enter__(self) -> tuple[Path, TextIO]:
         self.build_dir = tempfile.mkdtemp()
-        os.makedirs(self.cache_prefix, exist_ok=True)
+        os.makedirs(self.install_prefix, exist_ok=True)
 
         # Write worker PID
-        with open(self.cache_prefix / "WORKER_PID", "w") as f:
+        with open(self.install_prefix / "WORKER_PID", "w") as f:
             f.write(str(os.getpid()))
 
         self.starting_cwd = os.getcwd()
@@ -63,12 +63,12 @@ class BuildContext:
         self.build_log.close()
         shutil.rmtree(self.build_dir)
         os.chdir(self.starting_cwd)
-        os.remove(self.cache_prefix / "WORKER_PID")
+        os.remove(self.install_prefix / "WORKER_PID")
 
         # Build was not successful
         if not self.success_indicator.exists():
             # remove cache entry
-            shutil.rmtree(self.cache_prefix)
+            shutil.rmtree(self.install_prefix)
 
 
 def apply_patches(git_dir: Path, patches: list[Path]) -> bool:
@@ -186,13 +186,13 @@ def build_and_install_compiler(
 
     repo = select_repo(project, llvm_repo, gcc_repo)
     commit = repo.rev_to_commit(rev)
-    install_path = get_install_path(cache_prefix, project, commit)
-    success_indicator = install_path / "DONE"
+    install_prefix = get_install_path(cache_prefix, project, commit)
+    success_indicator = install_prefix / "DONE"
 
     if not logdir:
         logdir = cache_prefix / "logs"
     logdir.mkdir(exist_ok=True)
-    with BuildContext(cache_prefix, success_indicator, project, commit, logdir) as (
+    with BuildContext(install_prefix, success_indicator, project, commit, logdir) as (
         tmpdir,
         build_log,
     ):
@@ -208,7 +208,7 @@ def build_and_install_compiler(
         )
         res = _run_build_and_install(
             project,
-            install_path,
+            install_prefix,
             jobs if jobs else multiprocessing.cpu_count(),
             build_log,
         )
