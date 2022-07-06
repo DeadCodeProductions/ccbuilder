@@ -300,6 +300,7 @@ def run_as_module() -> None:
         gcc_repo=gcc_repo,
         llvm_repo=llvm_repo,
         patchdb=patchdb,
+        jobs=args.jobs,
     )
     if handle_build(args, bldr):
         return
