@@ -24,7 +24,7 @@ class Repo:
         self.main_branch = main_branch
 
     @cache
-    def get_best_common_ancestor(self, rev_a: Revision, rev_b: Revision) -> str:
+    def get_best_common_ancestor(self, rev_a: Revision, rev_b: Revision) -> Commit:
         a = self.rev_to_commit(rev_a)
         b = self.rev_to_commit(rev_b)
         return utils.run_cmd(
