@@ -32,7 +32,7 @@ from ccbuilder.builder.builder import (
 )
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.utils.utils import CompilerReleases, CompilerProject
-from ccbuilder.utils.repository import Repo, Commit
+from ccbuilder.utils.repository import Repo, Commit, Revision
 
 
 class PatchingResult(Enum):
@@ -51,7 +51,7 @@ class Patcher:
     def _build(
         self,
         project: CompilerProject,
-        rev: str,
+        rev: Revision,
         additional_patches: list[Path] = [],
     ) -> None:
         self.builder.build(project, rev=rev, additional_patches=additional_patches)
@@ -60,7 +60,7 @@ class Patcher:
         self,
         project: CompilerProject,
         repo: Repo,
-        rev: str,
+        rev: Revision,
         patches: list[Path],
     ) -> PatchingResult:
         if not self.patchdb.requires_all_these_patches(
@@ -95,11 +95,10 @@ class Patcher:
         repo: Repo,
         double_fail_counter: int,
         max_double_fail: int,
-        bad: str,
-        midpoint: str,
-        good: str,
-    ) -> str:
-        # TODO Update docs
+        bad: Revision,
+        midpoint: Revision,
+        good: Revision,
+    ) -> Commit:
         """
         Move the midpoint either forwards or backwards (depending on the double_fail_counter)
 
@@ -129,14 +128,14 @@ class Patcher:
 
     def _bisection(
         self,
-        good_rev: str,
-        bad_rev: str,
+        good_rev: Commit,
+        bad_rev: Commit,
         project: CompilerProject,
         repo: Repo,
         patches: list[Path],
         failure_is_good: bool = False,
         max_double_fail: int = 2,
-    ) -> tuple[str, str]:
+    ) -> tuple[Commit, Commit]:
 
         good = good_rev
         bad = bad_rev
@@ -188,20 +187,31 @@ class Patcher:
         self,
         project: CompilerProject,
         repo: Repo,
-        patchable_commit: str,
+        patchable_commit: Commit,
         potentially_human_readable_name: str,
         patches: list[Path],
-    ) -> tuple[Optional[str], Optional[str]]:
-        # TODO UPdate docs
-        """
-        Find two oldest common ancestors of patchable_commit and one of the releases:
+    ) -> tuple[Optional[Commit], Optional[Commit]]:
+        """Find two oldest common ancestors of patchable_commit and one of the releases:
             (1) that doesn't need the patch(es)
             (2) that is buildable only with the patch(es)
+
+        Args:
+            self:
+            project (CompilerProject): Compiler project that is worked on
+            repo (Repo): Repository of the `project`
+            patchable_commit (Commit): Commit that is known to be broken without
+                patches but is patchable with `patches`.
+            potentially_human_readable_name (str): A different name for the commit
+                for more human-friendly output.
+            patches (list[Path]): Patches that fix `patchable_commit`.
+
+        Returns:
+            tuple[Optional[Commit], Optional[Commit]]: Common ancestor (w.r.t. releases) that needs no
+                patch and the oldest patchable commit found.
         """
 
         # For now, just assume this is sorted in descending release-recency
         # Using commit dates doesn't really work
-        # TODO: do something with `from packaging import version; version.parse()`
         release_versions = ["trunk"] + CompilerReleases[project]
         release_versions.reverse()
 
@@ -258,10 +268,9 @@ class Patcher:
         self,
         project: CompilerProject,
         repo: Repo,
-        patchable_commit: str,
+        patchable_commit: Commit,
         patches: list[Path],
     ) -> None:
-        # TODO UPdate docs
         """Given a compiler, a revision of the compiler that normally does not build
         and the set of patches needed to fix this particular revision,
         find the continuous region on the commit history which requires all these
@@ -273,8 +282,9 @@ class Patcher:
         at all.
 
         Args:
-            compiler_config (utils.NestedNamespace): The compiler project which has the problematic commit (it is either config.llvm or config.gcc).
-            patchable_commit (str): The problematic commit which is buildable with `patches`.
+            project (CompilerProject): The compiler project which has the problematic commit.
+            repo (Repo): Repository corresponding to `project`.
+            patchable_commit (Commit): The problematic commit which is buildable with `patches`.
             patches (list[Path]): Patches required to build `patchable_commit`.
 
 
@@ -347,7 +357,7 @@ class Patcher:
 
     def find_fixer_from_introducer_to_releases(
         self,
-        introducer: str,
+        introducer: Commit,
         project: CompilerProject,
         repo: Repo,
         patches: list[Path],
@@ -422,23 +432,23 @@ class Patcher:
 
     def bisect_build(
         self,
-        good: str,
-        bad: str,
+        good: Commit,
+        bad: Commit,
         project: CompilerProject,
         repo: Repo,
         failure_is_good: bool = False,
-    ) -> tuple[str, str]:
-        # TODO UPdate docs
+    ) -> tuple[Commit, Commit]:
         """Bisect w.r.t. building and not building.
 
         Args:
-            good (str): Commit that is closer to the head of the branch than `bad`.
-            bad (str): Commit that is further away from the head of the branch than `good`.
-            compiler_config (CompilerConfig): The compiler being patched.
+            good (Commit): Commit that is closer to the head of the branch than `bad`.
+            bad (Commit): Commit that is further away from the head of the branch than `good`.
+            project (CompilerConfig): Project being patched.
+            repo (Repo): Repository for `project`.
             failure_is_good (bool): If failing to build is expected to happen to the `good` commit.
 
         Returns:
-            tuple[str, str]: The two commits around the bisection point.
+            tuple[Commit, Commit]: The two commits around the bisection point.
         """
 
         midpoint = ""
@@ -471,17 +481,18 @@ class Patcher:
         return (good, bad)
 
     def find_introducer(
-        self, project: CompilerProject, repo: Repo, broken_rev: str
-    ) -> str:
-        # TODO UPdate docs
+        self, project: CompilerProject, repo: Repo, broken_rev: Revision
+    ) -> Commit:
         """Given a broken commit, find the commit that introduced the build failure.
 
         Args:
-            compiler_config (NestedNamespace): Either config.gcc or config.llvm
-            broken_rev (str): The revision which does not build.
+            self:
+            project (CompilerProject):
+            repo (Repo): Repository for `project`
+            broken_rev (Revision): Revision that is broken
 
         Returns:
-            str: introducer commit hash
+            Commit: introducer commit hash
         """
         logging.info(f"Looking for introducer commit starting at {broken_rev}")
 
