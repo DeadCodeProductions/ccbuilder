@@ -9,9 +9,9 @@ from subprocess import run
 from ccbuilder.builder.builder import (
     build_and_install_compiler,
     Builder,
+    BuilderWithCache,
     BuildException,
 )
-from ccbuilder.builder.builderwithcache import BuilderWithCache
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
 from ccbuilder.utils.repository import Repo, RepositoryException, Revision, Commit
