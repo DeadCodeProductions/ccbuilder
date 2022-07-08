@@ -168,3 +168,27 @@ CompilerReleases = {
         "llvmorg-4.0.0",
     ],
 }
+
+MajorCompilerReleases = {
+    CompilerProject.GCC: [
+        "releases/gcc-12.1.0",
+        "releases/gcc-11.3.0",
+        "releases/gcc-10.3.0",
+        "releases/gcc-9.5.0",
+        "releases/gcc-8.5.0",
+        "releases/gcc-7.5.0",
+    ],
+    CompilerProject.LLVM: [
+        "llvmorg-14.0.5",
+        "llvmorg-13.0.1",
+        "llvmorg-12.0.1",
+        "llvmorg-11.1.0",
+        "llvmorg-10.0.1",
+        "llvmorg-9.0.1",
+        "llvmorg-8.0.1",
+        "llvmorg-7.1.0",
+        "llvmorg-6.0.1",
+        "llvmorg-5.0.2",
+        "llvmorg-4.0.1",
+    ],
+}

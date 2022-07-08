@@ -17,6 +17,7 @@ from ccbuilder.patcher.patcher import Patcher
 from ccbuilder.utils.repository import Repo, RepositoryException, Revision, Commit
 from ccbuilder.utils.utils import (
     CompilerProject,
+    MajorCompilerReleases,
     CompilerReleases,
     get_repo,
     get_compiler_info,
@@ -37,6 +38,7 @@ __all__ = [
     "Builder",
     "BuildException",
     "CompilerReleases",
+    "MajorCompilerReleases",
     "get_repo",
     "find_cached_revisions",
     "get_compiler_info",
