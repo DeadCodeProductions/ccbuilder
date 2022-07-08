@@ -3,10 +3,9 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
-from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TextIO
+from typing import TextIO, Literal, Union
 
 import ccbuilder.utils.repository as repository
 
@@ -39,22 +38,82 @@ def run_cmd_to_logfile(
     )
 
 
-class Compiler(Enum):
+class CompilerProject(Enum):
     GCC = 0
     LLVM = 1
 
     def to_string(self) -> str:
-        return "gcc" if self == Compiler.GCC else "clang"
+        return "gcc" if self == CompilerProject.GCC else "clang"
 
 
-@dataclass
-class CompilerConfig:
-    compiler: Compiler
-    repo: repository.Repo
+def get_repo(project: CompilerProject, path_to_repo: Path) -> repository.Repo:
+    match project:
+        case CompilerProject.LLVM:
+            return repository.Repo.llvm_repo(path_to_repo)
+        case CompilerProject.GCC:
+            return repository.Repo.gcc_repo(path_to_repo)
+    raise Exception("Unreachable")
+
+
+def select_repo(
+    project: CompilerProject, llvm_repo: repository.Repo, gcc_repo: repository.Repo
+) -> repository.Repo:
+    match project:
+        case CompilerProject.LLVM:
+            repo = llvm_repo
+        case CompilerProject.GCC:
+            repo = gcc_repo
+    return repo
+
+
+def get_compiler_project(project_name: str) -> CompilerProject:
+    match project_name:
+        case "gcc":
+            return CompilerProject.GCC
+        case "llvm" | "clang":
+            return CompilerProject.LLVM
+        case _:
+            raise Exception(f"Unknown compiler project {project_name}!")
+
+
+def get_compiler_info(
+    project_name: Union[Literal["llvm"], Literal["gcc"], Literal["clang"]],
+    repo_dir_prefix: Path,
+) -> tuple[CompilerProject, repository.Repo]:
+    match project_name:
+        case "gcc":
+            repo = repository.Repo(repo_dir_prefix / "gcc", "master")
+            return CompilerProject.GCC, repo
+        case "llvm" | "clang":
+            repo = repository.Repo(repo_dir_prefix / "llvm-project", "main")
+            return CompilerProject.LLVM, repo
+        case _:
+            raise Exception(f"Unknown compiler project {project_name}!")
+
+
+def find_cached_revisions(
+    project: CompilerProject, cache_prefix: Path
+) -> list[repository.Commit]:
+    match project:
+        case CompilerProject.GCC:
+            compiler_name = "gcc"
+        case CompilerProject.LLVM:
+            compiler_name = "clang"
+
+    compilers: list[str] = []
+
+    for entry in Path(cache_prefix).iterdir():
+        if entry.is_symlink() or not entry.stem.startswith(compiler_name):
+            continue
+        if not (entry / "bin" / compiler_name).exists():
+            continue
+        rev = str(entry).split("-")[-1]
+        compilers.append(rev)
+    return compilers
 
 
 CompilerReleases = {
-    Compiler.GCC: [
+    CompilerProject.GCC: [
         "releases/gcc-12.1.0",
         "releases/gcc-11.3.0",
         "releases/gcc-11.2.0",
@@ -77,7 +136,8 @@ CompilerReleases = {
         "releases/gcc-7.3.0",
         "releases/gcc-7.2.0",
     ],
-    Compiler.LLVM: [
+    CompilerProject.LLVM: [
+        "llvmorg-14.0.5",
         "llvmorg-14.0.4",
         "llvmorg-14.0.3",
         "llvmorg-14.0.2",
@@ -108,25 +168,3 @@ CompilerReleases = {
         "llvmorg-4.0.0",
     ],
 }
-
-
-def get_compiler_config(compiler_name: str, repo_path: Path) -> CompilerConfig:
-    assert compiler_name in ["clang", "llvm", "gcc"]
-
-    compiler = Compiler.GCC if compiler_name == "gcc" else Compiler.LLVM
-    main_branch = "master" if compiler_name == "gcc" else "main"
-    return CompilerConfig(
-        compiler,
-        repository.Repo(repo_path, main_branch),
-    )
-
-
-def get_repo(compiler: Compiler, path_to_repo: Path) -> repository.Repo:
-    match compiler:
-        case Compiler.LLVM:
-            return repository.Repo.llvm_repo(path_to_repo)
-        case Compiler.GCC:
-            return repository.Repo.gcc_repo(path_to_repo)
-    # The same version of mypy sometimes understands that
-    # this is exhaustive and sometimes it does not...
-    raise Exception("Unreachable")
