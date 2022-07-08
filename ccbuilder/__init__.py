@@ -10,45 +10,37 @@ from ccbuilder.builder.builder import (
     build_and_install_compiler,
     Builder,
     BuildException,
-    CompilerBuildJob,
-    get_compiler_build_job,
-    get_compiler_executable_from_job,
-    get_compiler_executable_from_revision_with_config,
-    get_install_path_from_job,
 )
 from ccbuilder.builder.builderwithcache import BuilderWithCache
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
 from ccbuilder.utils.repository import Repo, RepositoryException, Revision, Commit
 from ccbuilder.utils.utils import (
-    Compiler,
-    CompilerConfig,
-    get_compiler_config,
-    get_repo,
+    CompilerProject,
     CompilerReleases,
+    get_repo,
+    get_compiler_info,
+    get_compiler_project,
+    find_cached_revisions,
 )
 
 __all__ = [
-    "get_compiler_config",
-    "CompilerConfig",
-    "Compiler",
+    "CompilerProject",
     "Repo",
     "RepositoryException",
     "Revision",
     "Commit",
     "PatchDB",
     "Patcher",
-    "get_compiler_build_job",
     "build_and_install_compiler",
-    "CompilerBuildJob",
     "Builder",
-    "get_install_path_from_job",
-    "BuildException",
-    "get_compiler_executable_from_job",
-    "get_compiler_executable_from_revision_with_config",
     "BuilderWithCache",
-    "get_repo",
+    "BuildException",
     "CompilerReleases",
+    "get_repo",
+    "find_cached_revisions",
+    "get_compiler_info",
+    "get_compiler_project",
 ]
 
 _ROOT = Path(__file__).parent.absolute()
@@ -201,12 +193,12 @@ def ccbuilder_parser() -> ArgumentParser:
 
 def handle_pull(args: Namespace) -> bool:
     if args.pull:
-        cconfig_gcc = get_compiler_config("gcc", Path(args.repos_dir) / "gcc")
-        cconfig_llvm = get_compiler_config(
-            "llvm", Path(args.repos_dir) / "llvm-project"
+        gcc_repo = get_repo(CompilerProject.GCC, Path(args.repos_dir) / "gcc")
+        llvm_repo = get_repo(
+            CompilerProject.LLVM, Path(args.repos_dir) / "llvm-project"
         )
-        cconfig_gcc.repo.pull()
-        cconfig_llvm.repo.pull()
+        gcc_repo.pull()
+        llvm_repo.pull()
         return True
     return False
 
@@ -215,22 +207,18 @@ def handle_build(args: Namespace, bldr: Builder) -> bool:
     # TODO: handle separate repo inputs?
     patches = [Path(p.strip()).absolute() for p in args.patches] if args.patches else []
     if args.command == "build":
-        cconfig = get_compiler_config(args.compiler, Path(args.repos_dir))
-        print(
-            bldr.build_rev_with_config(
-                cconfig, args.revision.strip(), additional_patches=patches
-            )
-        )
+        project, _ = get_compiler_info(args.compiler, Path(args.repos_dir))
+        print(bldr.build(project, args.revision.strip(), additional_patches=patches))
         return True
     return False
 
 
-def handle_patch(args: Namespace, bldr: Builder, patchdb: PatchDB) -> bool:
+def handle_patch(args: Namespace, bldr: BuilderWithCache, patchdb: PatchDB) -> bool:
     if args.command == "patch":
         patches = (
             [Path(p.strip()).absolute() for p in args.patches] if args.patches else []
         )
-        cconfig = get_compiler_config(args.compiler, Path(args.repos_dir))
+        project, repo = get_compiler_info(args.compiler, Path(args.repos_dir))
         patcher = Patcher(
             Path(args.cache_prefix),
             patchdb=patchdb,
@@ -238,9 +226,9 @@ def handle_patch(args: Namespace, bldr: Builder, patchdb: PatchDB) -> bool:
             builder=bldr,
         )
         if args.find_ranges:
-            patcher.find_ranges(cconfig, args.revision.strip(), patches)
+            patcher.find_ranges(project, repo, args.revision.strip(), patches)
         elif args.find_introducer:
-            patcher.find_introducer(cconfig, args.revision.strip())
+            patcher.find_introducer(project, repo, args.revision.strip())
 
         return True
     return False
@@ -293,11 +281,22 @@ def run_as_module() -> None:
 
     _initialize(args)
     patchdb = PatchDB(Path(args.patches_dir) / "patchdb.json")
-    bldr = BuilderWithCache(Path(args.cache_prefix.strip()), patchdb)
     cache_prefix = Path(args.cache_prefix.strip())
 
     if handle_pull(args):
         return
+    if handle_cache(args, cache_prefix):
+        return
+    repo_dir_prefix = Path(args.repos_dir)
+    llvm_repo = get_repo(CompilerProject.LLVM, repo_dir_prefix / "llvm-project")
+    gcc_repo = get_repo(CompilerProject.LLVM, repo_dir_prefix / "gcc")
+
+    bldr = BuilderWithCache(
+        Path(args.cache_prefix.strip()),
+        gcc_repo=gcc_repo,
+        llvm_repo=llvm_repo,
+        patchdb=patchdb,
+    )
     if handle_build(args, bldr):
         return
     if handle_patch(args, bldr, patchdb):
