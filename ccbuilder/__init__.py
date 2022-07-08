@@ -8,8 +8,8 @@ from subprocess import run
 
 from ccbuilder.builder.builder import (
     build_and_install_compiler,
+    BuilderWithoutCache,
     Builder,
-    BuilderWithCache,
     BuildException,
 )
 from ccbuilder.patcher.patchdatabase import PatchDB
@@ -33,8 +33,8 @@ __all__ = [
     "PatchDB",
     "Patcher",
     "build_and_install_compiler",
+    "BuilderWithoutCache",
     "Builder",
-    "BuilderWithCache",
     "BuildException",
     "CompilerReleases",
     "get_repo",
@@ -203,7 +203,7 @@ def handle_pull(args: Namespace) -> bool:
     return False
 
 
-def handle_build(args: Namespace, bldr: Builder) -> bool:
+def handle_build(args: Namespace, bldr: BuilderWithoutCache) -> bool:
     # TODO: handle separate repo inputs?
     patches = [Path(p.strip()).absolute() for p in args.patches] if args.patches else []
     if args.command == "build":
@@ -213,7 +213,7 @@ def handle_build(args: Namespace, bldr: Builder) -> bool:
     return False
 
 
-def handle_patch(args: Namespace, bldr: BuilderWithCache, patchdb: PatchDB) -> bool:
+def handle_patch(args: Namespace, bldr: Builder, patchdb: PatchDB) -> bool:
     if args.command == "patch":
         patches = (
             [Path(p.strip()).absolute() for p in args.patches] if args.patches else []
@@ -291,7 +291,7 @@ def run_as_module() -> None:
     llvm_repo = get_repo(CompilerProject.LLVM, repo_dir_prefix / "llvm-project")
     gcc_repo = get_repo(CompilerProject.LLVM, repo_dir_prefix / "gcc")
 
-    bldr = BuilderWithCache(
+    bldr = Builder(
         Path(args.cache_prefix.strip()),
         gcc_repo=gcc_repo,
         llvm_repo=llvm_repo,

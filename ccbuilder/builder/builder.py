@@ -217,7 +217,7 @@ def build_and_install_compiler(
         return res
 
 
-class Builder:
+class BuilderWithoutCache:
     def __init__(
         self,
         cache_prefix: Path,
@@ -278,7 +278,7 @@ def worker_alive(worker_indicator: Path) -> bool:
     return False
 
 
-class BuilderWithCache(Builder):
+class Builder(BuilderWithoutCache):
     def build(
         self,
         project: CompilerProject,
