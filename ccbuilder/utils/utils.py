@@ -127,3 +127,6 @@ def get_repo(compiler: Compiler, path_to_repo: Path) -> repository.Repo:
             return repository.Repo.llvm_repo(path_to_repo)
         case Compiler.GCC:
             return repository.Repo.gcc_repo(path_to_repo)
+    # The same version of mypy sometimes understands that
+    # this is exhaustive and sometimes it does not...
+    raise Exception("Unreachable")
