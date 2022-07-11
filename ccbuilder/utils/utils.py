@@ -67,6 +67,14 @@ def select_repo(
 
 
 def get_compiler_project(project_name: str) -> CompilerProject:
+    """Get the `CompilerProject` from the project name.
+
+    Args:
+        project_name (str):
+
+    Returns:
+        CompilerProject: Project corresponding to `project_name`.
+    """
     match project_name:
         case "gcc":
             return CompilerProject.GCC
@@ -94,6 +102,15 @@ def get_compiler_info(
 def find_cached_revisions(
     project: CompilerProject, cache_prefix: Path
 ) -> list[repository.Commit]:
+    """Get all commits of `project` that have been built and cached in `cache_prefix`.
+
+    Args:
+        project (CompilerProject): Project to get commits for.
+        cache_prefix (Path): Path to cache.
+
+    Returns:
+        list[repository.Commit]:
+    """
     match project:
         case CompilerProject.GCC:
             compiler_name = "gcc"
