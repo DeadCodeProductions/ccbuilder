@@ -121,6 +121,17 @@ class Repo:
     def direct_first_parent_path(
         self, older: Revision, younger: Revision
     ) -> list[Commit]:
+        """Get interval of commits [younger, older] always following the
+        first parent.
+
+        Args:
+            self:
+            older (Revision): Older commit
+            younger (Revision): Younger commit
+
+        Returns:
+            list[Commit]: Commits [younger, older] following the first parent.
+        """
         cmd = f"git -C {self.path} rev-list --first-parent {younger} ^{older}"
         try:
             res = [
@@ -156,6 +167,25 @@ class Repo:
     def is_branch_point_ancestor_wrt_master(
         self, rev_old: Revision, rev_young: Revision
     ) -> bool:
+        """
+        In the following example, Young is not ancestor of Old but
+        their respective best common ancestors wrt to main (i.e. the commit
+        where they branched away from Main) are ancestors.
+
+        Main
+         | Young
+         |/
+         | Old
+         |/
+
+        Args:
+            self:
+            rev_old (Revision): rev_old
+            rev_young (Revision): rev_young
+
+        Returns:
+            bool: True if their best common ancestors with main are ancestors.
+        """
         rev_old = self.rev_to_commit(rev_old)
         rev_young = self.rev_to_commit(rev_young)
         rev_master = self.rev_to_commit("master")
