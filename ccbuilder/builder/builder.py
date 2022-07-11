@@ -25,6 +25,11 @@ class BuildException(Exception):
 
 @dataclass
 class BuildContext:
+    """Creates a temporary directory for a build, creates the install prefix
+    and manages the 'communication' between building processes s.t. a compiler is
+    not built twice.
+    """
+
     install_prefix: Path
     success_indicator: Path
     project: CompilerProject
@@ -71,6 +76,15 @@ class BuildContext:
 
 
 def apply_patches(git_dir: Path, patches: list[Path]) -> bool:
+    """Applies the given `patches` to `git_dir` in the order defined by `patches`.
+
+    Args:
+        git_dir (Path): Path to git repository to apply the patches to.
+        patches (list[Path]): List of patches to apply.
+
+    Returns:
+        bool: True if it was possible to apply all the patches.
+    """
     patches = [patch.absolute() for patch in patches]
     git_patches = [str(patch) for patch in patches if not str(patch).endswith(".sh")]
     sh_patches = [f"sh {patch}" for patch in patches if str(patch).endswith(".sh")]
@@ -98,13 +112,37 @@ def patch_if_necessary(
     working_dir: Path,
     additional_patches: list[Path] = [],
 ) -> None:
+    """Looks up the known required patches for `commit_to_patch` in `patchdb`
+    and applies them, if necessary.
+    May raise a `BuildException` if the patches could not be applied.
+
+    Args:
+        commit_to_patch (Commit): The commit to look up the patches
+        patchdb (PatchDB): PatchDB
+        working_dir (Path): Path to git repository which has `commit_to_patch` checked out.
+        additional_patches (list[Path]): Additional patches to apply *after* the ones found in `patchdb`.
+
+    Returns:
+        None:
+    """
     patches = patchdb.required_patches(commit_to_patch) + additional_patches
     if patches:
         if not apply_patches(working_dir, patches):
             raise BuildException(f"Could not apply patches: {patches}")
 
 
-def llvm_build_and_install(install_prefix: Path, cores: int, log_file: TextIO) -> None:
+def llvm_build_and_install(install_prefix: Path, jobs: int, log_file: TextIO) -> None:
+    """Build and install LLVM. Must only be called in a `BuildContext`.
+    May raise a `CalledProcessError`.
+
+    Args:
+        install_prefix (Path): Install prefix for the build (in the cache).
+        jobs (int): Amount of jobs to build with
+        log_file (TextIO): File to log the build process to.
+
+    Returns:
+        None:
+    """
     os.chdir("build")
     logging.debug("LLVM: Starting cmake")
     cmake_cmd = f"cmake ../llvm -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS=clang -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_USE_NEWPM=ON -DLLVM_TARGETS_TO_BUILD=X86 -DCMAKE_INSTALL_PREFIX={install_prefix} -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON"
@@ -114,10 +152,21 @@ def llvm_build_and_install(install_prefix: Path, cores: int, log_file: TextIO) -
     )
 
     logging.debug("LLVM: Starting to build...")
-    run_cmd_to_logfile(f"ninja -j {cores} install", log_file=log_file)
+    run_cmd_to_logfile(f"ninja -j {jobs} install", log_file=log_file)
 
 
-def gcc_build_and_install(install_prefix: Path, cores: int, log_file: TextIO) -> None:
+def gcc_build_and_install(install_prefix: Path, jobs: int, log_file: TextIO) -> None:
+    """Build and install GCC. Must only be called in a `BuildContext`.
+    May raise a `CalledProcessError`.
+
+    Args:
+        install_prefix (Path): Install prefix for the build (in the cache).
+        jobs (int): Amount of jobs to build with
+        log_file (TextIO): File to log the build process to.
+
+    Returns:
+        None:
+    """
     pre_cmd = "./contrib/download_prerequisites"
     logging.debug("GCC: Starting download_prerequisites")
     run_cmd_to_logfile(pre_cmd, log_file=log_file)
@@ -131,7 +180,7 @@ def gcc_build_and_install(install_prefix: Path, cores: int, log_file: TextIO) ->
     run_cmd_to_logfile(configure_cmd, log_file=log_file)
 
     logging.debug("GCC: Starting to build...")
-    run_cmd_to_logfile(f"make -j {cores}", log_file=log_file)
+    run_cmd_to_logfile(f"make -j {jobs}", log_file=log_file)
     run_cmd_to_logfile("make install-strip", log_file=log_file)
 
 
@@ -153,6 +202,18 @@ def _run_build_and_install(
 def get_install_path(
     cache_prefix: Path, project: CompilerProject, commit: Commit
 ) -> Path:
+    """Get the install path for a given project and commit
+    combination.
+    `cache_prefix` / projectname-commit
+
+    Args:
+        cache_prefix (Path): cache_prefix
+        project (CompilerProject): project
+        commit (Commit): commit
+
+    Returns:
+        Path: cache_prefix / projectname-commit
+    """
     match project:
         case CompilerProject.LLVM:
             install_name_prefix = "clang"
@@ -182,6 +243,25 @@ def build_and_install_compiler(
     additional_patches: Optional[list[Path]] = None,
     logdir: Optional[Path] = None,
 ) -> Path:
+    """Build and install a compiler specified via `project` and `rev`.
+    Will install to `cache_prefix`/projectname-commit.
+
+
+    Args:
+        project (CompilerProject): LLVM or GCC.
+        rev (Revision): rev
+        cache_prefix (Path): cache_prefix
+        llvm_repo (Repo): LLVM repository
+        gcc_repo (Repo): GCC repository
+        patchdb (PatchDB): The PatchDB to use.
+        get_executable (bool): Whether or not to return the path to the executable compiler instead.
+        jobs (Optional[int]): Amount of jobs
+        additional_patches (Optional[list[Path]]): Additional patches to apply.
+        logdir (Optional[Path]): Path to where the build logs are saved.
+
+    Returns:
+        Path: `cache_prefix`/projectname-commit or `cache_prefix`/projectname-commit/bin/$compiler if `get_executable` is set.
+    """
 
     repo = select_repo(project, llvm_repo, gcc_repo)
     commit = repo.rev_to_commit(rev)
@@ -263,7 +343,7 @@ class BuilderWithoutCache:
         )
 
 
-def worker_alive(worker_indicator: Path) -> bool:
+def _worker_alive(worker_indicator: Path) -> bool:
     if worker_indicator.exists():
         with open(worker_indicator, "r") as f:
             worker_pid = int(f.read())
@@ -288,6 +368,21 @@ class Builder(BuilderWithoutCache):
         jobs: Optional[int] = None,
         force: bool = False,
     ) -> Path:
+        """Build the specified compiler and return the path to the installation location.
+        If the specified compiler has already been built, `build` will return the cached path.
+
+        Args:
+            self:
+            project (CompilerProject): Project to build.
+            rev (str): Revision of the project to build.
+            get_executable (bool): Whether or not to return the path to the executable compiler instead.
+            additional_patches (Optional[list[Path]]): Additional patches to apply.
+            jobs (Optional[int]): Amount of jobs to use for the building.
+            force (bool): Build the specified compiler even if it has been cached before.
+
+        Returns:
+            Path: `cache_prefix`/projectname-commit or `cache_prefix`/projectname-commit/bin/$compiler if `get_executable` is set.
+        """
 
         repo = select_repo(project, self.llvm_repo, self.gcc_repo)
         commit = repo.rev_to_commit(rev)
@@ -300,7 +395,7 @@ class Builder(BuilderWithoutCache):
         if not force:
             if success_indicator.exists():
                 return install_path / postfix
-            elif install_path.exists() and worker_alive(worker_indicator):
+            elif install_path.exists() and _worker_alive(worker_indicator):
 
                 logging.info(
                     f"This compiler seems to be built by some other worker. Need to wait. If there is no other worker, abort this command and run ccbuilder cache clean."
@@ -308,7 +403,7 @@ class Builder(BuilderWithoutCache):
                 start_time = time.time()
                 counter = 0
                 while (
-                    worker_alive(worker_indicator)
+                    _worker_alive(worker_indicator)
                     and not success_indicator.exists()
                     and install_path.exists()
                 ):
