@@ -270,7 +270,7 @@ def build_and_install_compiler(
 
     if not logdir:
         logdir = cache_prefix / "logs"
-    logdir.mkdir(exist_ok=True)
+    logdir.mkdir(exist_ok=True, parents=True)
     with BuildContext(install_prefix, success_indicator, project, commit, logdir) as (
         tmpdir,
         build_log,
