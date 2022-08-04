@@ -135,6 +135,7 @@ CompilerReleases = {
         "releases/gcc-11.3.0",
         "releases/gcc-11.2.0",
         "releases/gcc-11.1.0",
+        "releases/gcc-10.4.0",
         "releases/gcc-10.3.0",
         "releases/gcc-10.2.0",
         "releases/gcc-10.1.0",
@@ -154,6 +155,7 @@ CompilerReleases = {
         "releases/gcc-7.2.0",
     ],
     CompilerProject.LLVM: [
+        "llvmorg-14.0.6",
         "llvmorg-14.0.5",
         "llvmorg-14.0.4",
         "llvmorg-14.0.3",
@@ -190,13 +192,13 @@ MajorCompilerReleases = {
     CompilerProject.GCC: [
         "releases/gcc-12.1.0",
         "releases/gcc-11.3.0",
-        "releases/gcc-10.3.0",
+        "releases/gcc-10.4.0",
         "releases/gcc-9.5.0",
         "releases/gcc-8.5.0",
         "releases/gcc-7.5.0",
     ],
     CompilerProject.LLVM: [
-        "llvmorg-14.0.5",
+        "llvmorg-14.0.6",
         "llvmorg-13.0.1",
         "llvmorg-12.0.1",
         "llvmorg-11.1.0",
