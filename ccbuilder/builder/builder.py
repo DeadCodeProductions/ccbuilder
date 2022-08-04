@@ -1,6 +1,7 @@
 import logging
 import multiprocessing
 import os
+import sys
 import shutil
 import subprocess
 import tempfile
@@ -34,7 +35,7 @@ class BuildContext:
     success_indicator: Path
     project: CompilerProject
     commit_to_build: Commit
-    logdir: Path
+    logdir: Optional[Path]
 
     def __enter__(self) -> tuple[Path, TextIO]:
         self.build_dir = tempfile.mkdtemp()
@@ -47,16 +48,18 @@ class BuildContext:
         self.starting_cwd = os.getcwd()
         os.chdir(self.build_dir)
 
-        # Build log file
-        current_time = time.strftime("%Y%m%d-%H%M%S")
-        name = self.project.to_string()
-        build_log_path = (
-            self.logdir / f"{current_time}-{name}-{self.commit_to_build}.log"
-        )
-        self.build_log = open(build_log_path, "a")
-        logging.info(f"Build log at {build_log_path}")
-
-        return (Path(self.build_dir), self.build_log)
+        if self.logdir:
+            # Build log file
+            current_time = time.strftime("%Y%m%d-%H%M%S")
+            name = self.project.to_string()
+            build_log_path = (
+                self.logdir / f"{current_time}-{name}-{self.commit_to_build}.log"
+            )
+            self.build_log = open(build_log_path, "a")
+            logging.info(f"Build log at {build_log_path}")
+            return (Path(self.build_dir), self.build_log)
+        else:
+            return (Path(self.build_dir), sys.stderr)
 
     def __exit__(
         self,
@@ -64,7 +67,8 @@ class BuildContext:
         exc_value: Optional[BaseException],
         exc_traceback: Optional[TracebackType],
     ) -> None:
-        self.build_log.close()
+        if self.logdir:
+            self.build_log.close()
         shutil.rmtree(self.build_dir)
         os.chdir(self.starting_cwd)
         os.remove(self.install_prefix / "WORKER_PID")
@@ -268,9 +272,8 @@ def build_and_install_compiler(
     install_prefix = get_install_path(cache_prefix, project, commit)
     success_indicator = install_prefix / "DONE"
 
-    if not logdir:
-        logdir = cache_prefix / "logs"
-    logdir.mkdir(exist_ok=True, parents=True)
+    if logdir:
+        logdir.mkdir(exist_ok=True, parents=True)
     with BuildContext(install_prefix, success_indicator, project, commit, logdir) as (
         tmpdir,
         build_log,
