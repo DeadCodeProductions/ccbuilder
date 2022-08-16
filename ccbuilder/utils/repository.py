@@ -9,6 +9,8 @@ from typing import Optional
 
 import ccbuilder.utils.utils as utils
 
+from ccbuilder.defaults import DEFAULT_REPOS_DIR
+
 
 class RepositoryException(Exception):
     pass
@@ -309,12 +311,14 @@ class Repo:
         except subprocess.SubprocessError as e:
             raise RepositoryException(e)
 
-    @cache
-    @staticmethod
-    def llvm_repo(path_to_repo: Path) -> Repo:
-        return Repo(path_to_repo, "main")
 
-    @cache
-    @staticmethod
-    def gcc_repo(path_to_repo: Path) -> Repo:
+def get_llvm_repo(path_to_repo: Optional[Path] = None) -> Repo:
+    if path_to_repo:
+        return Repo(path_to_repo, "main")
+    return Repo(DEFAULT_REPOS_DIR / "llvm-project", "main")
+
+
+def get_gcc_repo(path_to_repo: Optional[Path] = None) -> Repo:
+    if path_to_repo:
         return Repo(path_to_repo, "master")
+    return Repo(DEFAULT_REPOS_DIR / "gcc", "master")

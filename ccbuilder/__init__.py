@@ -12,12 +12,18 @@ from ccbuilder.builder.builder import (
 )
 from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.patcher.patcher import Patcher
-from ccbuilder.utils.repository import Repo, RepositoryException, Revision, Commit
+from ccbuilder.utils.repository import (
+    Repo,
+    RepositoryException,
+    Revision,
+    Commit,
+    get_gcc_repo,
+    get_llvm_repo,
+)
 from ccbuilder.utils.utils import (
     CompilerProject,
     MajorCompilerReleases,
     CompilerReleases,
-    get_repo,
     get_compiler_info,
     get_compiler_project,
     find_cached_revisions,
@@ -45,7 +51,8 @@ __all__ = [
     "BuildException",
     "CompilerReleases",
     "MajorCompilerReleases",
-    "get_repo",
+    "get_gcc_repo",
+    "get_llvm_repo",
     "find_cached_revisions",
     "get_compiler_info",
     "get_compiler_project",
@@ -177,10 +184,8 @@ def ccbuilder_parser() -> ArgumentParser:
 
 def handle_pull(args: Namespace) -> bool:
     if args.pull:
-        gcc_repo = get_repo(CompilerProject.GCC, Path(args.repos_dir) / "gcc")
-        llvm_repo = get_repo(
-            CompilerProject.LLVM, Path(args.repos_dir) / "llvm-project"
-        )
+        gcc_repo = get_gcc_repo(Path(args.repos_dir) / "gcc")
+        llvm_repo = get_llvm_repo(Path(args.repos_dir) / "llvm-project")
         gcc_repo.pull()
         llvm_repo.pull()
         return True
@@ -274,8 +279,8 @@ def run_as_module() -> None:
     if handle_cache(args, cache_prefix):
         return
     repo_dir_prefix = Path(args.repos_dir)
-    llvm_repo = get_repo(CompilerProject.LLVM, repo_dir_prefix / "llvm-project")
-    gcc_repo = get_repo(CompilerProject.LLVM, repo_dir_prefix / "gcc")
+    llvm_repo = get_llvm_repo(repo_dir_prefix / "llvm-project")
+    gcc_repo = get_gcc_repo(repo_dir_prefix / "gcc")
 
     bldr = Builder(
         Path(args.cache_prefix.strip()),
