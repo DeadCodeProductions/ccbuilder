@@ -1,10 +1,8 @@
 import logging
 import os
-import shlex
 from argparse import ArgumentParser, Namespace
 from multiprocessing import cpu_count
 from pathlib import Path
-from subprocess import run
 
 from ccbuilder.builder.builder import (
     build_and_install_compiler,
@@ -23,6 +21,8 @@ from ccbuilder.utils.utils import (
     get_compiler_info,
     get_compiler_project,
     find_cached_revisions,
+    initialize_repos,
+    initialize_patches_dir,
 )
 
 from ccbuilder.defaults import (
@@ -49,39 +49,12 @@ __all__ = [
     "find_cached_revisions",
     "get_compiler_info",
     "get_compiler_project",
+    "initialize_repos",
+    "initialize_patches_dir",
     "DEFAULT_PREFIX_PARENT_PATH",
     "DEFAULT_PATCH_DIR",
     "DEFAULT_REPOS_DIR",
 ]
-
-_ROOT = Path(__file__).parent.absolute()
-
-
-def _initialize(args: Namespace) -> None:
-    from shutil import copy
-
-    repos_path = Path(args.repos_dir)
-    repos_path.mkdir(parents=True, exist_ok=True)
-    llvm = repos_path / "llvm-project"
-    if not llvm.exists():
-        print("Cloning LLVM...")
-        run(
-            shlex.split(f"git clone https://github.com/llvm/llvm-project.git {llvm}"),
-            check=True,
-        )
-    gcc = repos_path / "gcc"
-    if not gcc.exists():
-        print("Cloning GCC...")
-        run(
-            shlex.split(f"git clone git://gcc.gnu.org/git/gcc.git {gcc}"),
-            check=True,
-        )
-    patches_path = Path(args.patches_dir)
-    if not patches_path.exists():
-        patches_path.mkdir(parents=True, exist_ok=True)
-        patches_source_dir = _ROOT / "data" / "patches"
-        for entry in patches_source_dir.iterdir():
-            copy(entry, patches_path / entry.name)
 
 
 def ccbuilder_base_parser() -> ArgumentParser:
@@ -290,7 +263,9 @@ def run_as_module() -> None:
             print(f"No such log level {args.log_level.upper()}")
             exit(1)
 
-    _initialize(args)
+    initialize_repos(args.repos_dir)
+    initialize_patches_dir(args.repos_dir)
+
     patchdb = PatchDB(Path(args.patches_dir) / "patchdb.json")
     cache_prefix = Path(args.cache_prefix.strip())
 

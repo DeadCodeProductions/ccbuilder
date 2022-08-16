@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+from shutil import copy
 from enum import Enum
 from pathlib import Path
 from typing import TextIO, Literal, Union
@@ -211,3 +212,26 @@ MajorCompilerReleases = {
         "llvmorg-4.0.1",
     ],
 }
+
+
+def initialize_repos(repos_dir: str) -> None:
+    repos_path = Path(repos_dir)
+    repos_path.mkdir(parents=True, exist_ok=True)
+    llvm = repos_path / "llvm-project"
+    if not llvm.exists():
+        print("Cloning LLVM...")
+        run_cmd(f"git clone https://github.com/llvm/llvm-project.git {llvm}")
+    gcc = repos_path / "gcc"
+    if not gcc.exists():
+        print("Cloning GCC...")
+        run_cmd(f"git clone git://gcc.gnu.org/git/gcc.git {gcc}")
+
+
+def initialize_patches_dir(patches_dir: str) -> None:
+    patches_path = Path(patches_dir)
+    if not patches_path.exists():
+        _ROOT = Path(__file__).parent.parent.absolute()
+        patches_path.mkdir(parents=True, exist_ok=True)
+        patches_source_dir = _ROOT / "data" / "patches"
+        for entry in patches_source_dir.iterdir():
+            copy(entry, patches_path / entry.name)
