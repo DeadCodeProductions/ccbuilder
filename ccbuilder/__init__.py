@@ -25,6 +25,12 @@ from ccbuilder.utils.utils import (
     find_cached_revisions,
 )
 
+from ccbuilder.defaults import (
+    DEFAULT_PREFIX_PARENT_PATH,
+    DEFAULT_PATCH_DIR,
+    DEFAULT_REPOS_DIR,
+)
+
 __all__ = [
     "CompilerProject",
     "Repo",
@@ -43,6 +49,9 @@ __all__ = [
     "find_cached_revisions",
     "get_compiler_info",
     "get_compiler_project",
+    "DEFAULT_PREFIX_PARENT_PATH",
+    "DEFAULT_PATCH_DIR",
+    "DEFAULT_REPOS_DIR",
 ]
 
 _ROOT = Path(__file__).parent.absolute()
@@ -98,26 +107,26 @@ def ccbuilder_base_parser() -> ArgumentParser:
         default=cpu_count(),
         help="Number of build jobs (default:use all cores)",
     )
-    default_prefix = str(Path.home() / ".cache" / "ccbuilder-compilers")
+
+    # XXX:the word prefix is a bit misleading, this is the parent of the prefix
     parser.add_argument(
         "--cache-prefix",
         type=str,
-        default=default_prefix,
-        help=f"Installation prefix (default: {default_prefix})",
+        default=str(DEFAULT_PREFIX_PARENT_PATH),
+        help=f"Installation prefix (default: {DEFAULT_PREFIX_PARENT_PATH})",
     )
-    default_patch_dir = str(Path.home() / ".cache" / "ccbuilder-patches")
+    default_patch_dir = str()
     parser.add_argument(
         "--patches-dir",
         type=str,
-        default=default_patch_dir,
-        help=f"Path to the patches directory (default: {default_patch_dir})",
+        default=str(DEFAULT_PATCH_DIR),
+        help=f"Path to the patches directory (default: {DEFAULT_PATCH_DIR})",
     )
-    default_repos_dir = str(Path.home() / ".cache" / "ccbuilder-repos")
     parser.add_argument(
         "--repos-dir",
         type=str,
-        default=default_repos_dir,
-        help=f"Path to the directory with the compiler repositories (default: {default_repos_dir})",
+        default=str(DEFAULT_REPOS_DIR),
+        help=f"Path to the directory with the compiler repositories (default: {DEFAULT_REPOS_DIR})",
     )
 
     parser.add_argument(
