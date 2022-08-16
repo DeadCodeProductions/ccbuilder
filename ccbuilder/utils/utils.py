@@ -47,15 +47,6 @@ class CompilerProject(Enum):
         return "gcc" if self == CompilerProject.GCC else "clang"
 
 
-def get_repo(project: CompilerProject, path_to_repo: Path) -> repository.Repo:
-    match project:
-        case CompilerProject.LLVM:
-            return repository.Repo.llvm_repo(path_to_repo)
-        case CompilerProject.GCC:
-            return repository.Repo.gcc_repo(path_to_repo)
-    raise Exception("Unreachable")
-
-
 def select_repo(
     project: CompilerProject, llvm_repo: repository.Repo, gcc_repo: repository.Repo
 ) -> repository.Repo:
