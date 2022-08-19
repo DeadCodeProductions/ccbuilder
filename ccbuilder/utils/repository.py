@@ -302,6 +302,13 @@ class Repo:
         assert len(res.split("\n")) == 1
         return res
 
+    def prune_worktree(self) -> None:
+        prune_str = f"git -C {self.path} worktree prune"
+        try:
+            utils.run_cmd(prune_str, capture_output=True)
+        except subprocess.SubprocessError as e:
+            raise RepositoryException(e)
+
     @cache
     @staticmethod
     def llvm_repo(path_to_repo: Path) -> Repo:

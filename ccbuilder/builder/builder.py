@@ -294,10 +294,11 @@ def build_and_install_compiler(
             jobs if jobs else multiprocessing.cpu_count(),
             build_log,
         )
-        success_indicator.touch()
-        if get_executable:
-            return res / get_executable_postfix(project)
-        return res
+    success_indicator.touch()
+    repo.prune_worktree()
+    if get_executable:
+        return res / get_executable_postfix(project)
+    return res
 
 
 class BuilderWithoutCache:
