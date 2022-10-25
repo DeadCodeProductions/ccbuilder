@@ -264,7 +264,7 @@ def run_as_module() -> None:
             exit(1)
 
     initialize_repos(args.repos_dir)
-    initialize_patches_dir(args.repos_dir)
+    initialize_patches_dir(args.patches_dir)
 
     patchdb = PatchDB(Path(args.patches_dir) / "patchdb.json")
     cache_prefix = Path(args.cache_prefix.strip())

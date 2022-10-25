@@ -39,7 +39,9 @@ class PatchDB:
                     f"Missing default patch database. Recreating it at {default}..."
                 )
                 os.makedirs(path_to_db.parent, exist_ok=True)
-                for entry in (Path(__file__).parent.parent / "patches").iterdir():
+                for entry in (
+                    Path(__file__).parent.parent / "data" / "patches"
+                ).iterdir():
                     if not (default.parent / entry.name).exists():
                         copy(entry, default.parent / entry.name)
 
