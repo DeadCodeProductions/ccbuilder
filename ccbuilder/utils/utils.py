@@ -12,12 +12,18 @@ import ccbuilder.utils.repository as repository
 
 
 def run_cmd(
-    cmd: str, capture_output: bool = False, additional_env: dict[str, str] = {}
+    cmd: str,
+    capture_output: bool = False,
+    additional_env: dict[str, str] = {},
+    print_output: bool = False,
 ) -> str:
     env = os.environ.copy()
     env.update(additional_env)
     res = subprocess.run(
-        shlex.split(cmd), capture_output=capture_output, check=True, env=env
+        shlex.split(cmd),
+        capture_output=(capture_output or not print_output),
+        check=True,
+        env=env,
     )
     if capture_output:
         return res.stdout.decode("utf-8").strip()
