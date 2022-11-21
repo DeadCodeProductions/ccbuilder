@@ -3,6 +3,7 @@ import os
 from argparse import ArgumentParser, Namespace
 from multiprocessing import cpu_count
 from pathlib import Path
+from typing import Optional
 
 from ccbuilder.builder.builder import (
     build_and_install_compiler,
@@ -89,6 +90,7 @@ def ccbuilder_base_parser() -> ArgumentParser:
     )
 
     # XXX:the word prefix is a bit misleading, this is the parent of the prefix
+    # Misleading in the way, that it could be mistaken for the installation prefix?
     parser.add_argument(
         "--cache-prefix",
         type=str,
@@ -117,6 +119,11 @@ def ccbuilder_base_parser() -> ArgumentParser:
         type=str,
     )
 
+    parser.add_argument(
+        "--logdir",
+        help="Path to the directory where log files should be stored in. If not specified, ccbuilder will print to stdout.",
+        type=str,
+    )
     return parser
 
 
@@ -282,13 +289,21 @@ def run_as_module() -> None:
     llvm_repo = get_llvm_repo(repo_dir_prefix / "llvm-project")
     gcc_repo = get_gcc_repo(repo_dir_prefix / "gcc")
 
+    if args.logdir:
+        logdir = Path(args.logdir).absolute()
+        logdir.mkdir(exist_ok=True, parents=True)
+    else:
+        logdir = None
+
     bldr = Builder(
         Path(args.cache_prefix.strip()).absolute(),
         gcc_repo=gcc_repo,
         llvm_repo=llvm_repo,
         patchdb=patchdb,
+        logdir=logdir,
         jobs=args.jobs,
     )
+
     if handle_build(args, bldr):
         return
     if handle_patch(args, bldr, patchdb):
