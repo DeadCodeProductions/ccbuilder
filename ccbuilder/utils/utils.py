@@ -24,9 +24,19 @@ def run_cmd(
     additional_env: dict[str, str] = {},
     stdout: TextIO = sys.stdout,
     stderr: TextIO = sys.stderr,
+    ignore_output: bool = False,
 ) -> str:
     env = os.environ.copy()
     env.update(additional_env)
+
+    _stdout: TextIO | int = stdout
+    _stderr: TextIO | int = stderr
+
+    # capture_output is more powerful than ignore_output
+    # due to the implementation of subprocess.run
+    if ignore_output:
+        _stdout = subprocess.DEVNULL
+        _stderr = subprocess.DEVNULL
 
     res = subprocess.run(
         shlex.split(cmd),
