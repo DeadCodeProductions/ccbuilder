@@ -1,27 +1,38 @@
 from __future__ import annotations
 
 import os
+import sys
 import shlex
 import subprocess
 from shutil import copy
 from enum import Enum
 from pathlib import Path
-from typing import TextIO, Literal, Union
+from typing import TextIO, Literal, Union, Optional
+from dataclasses import dataclass
 
 import ccbuilder.utils.repository as repository
 
 
+@dataclass(kw_only=True, frozen=True)
+class ProcessResult:
+    return_value: int
+
+
 def run_cmd(
     cmd: str,
-    capture_output: bool = False,
+    capture_output: bool = True,
     additional_env: dict[str, str] = {},
-    print_output: bool = False,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
 ) -> str:
     env = os.environ.copy()
     env.update(additional_env)
+
     res = subprocess.run(
         shlex.split(cmd),
-        capture_output=(capture_output or not print_output),
+        capture_output=capture_output,
+        stdout=stdout,
+        stderr=stderr,
         check=True,
         env=env,
     )
