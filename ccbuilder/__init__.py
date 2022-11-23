@@ -283,7 +283,7 @@ def run_as_module() -> None:
     gcc_repo = get_gcc_repo(repo_dir_prefix / "gcc")
 
     bldr = Builder(
-        Path(args.cache_prefix.strip()),
+        Path(args.cache_prefix.strip()).absolute(),
         gcc_repo=gcc_repo,
         llvm_repo=llvm_repo,
         patchdb=patchdb,
