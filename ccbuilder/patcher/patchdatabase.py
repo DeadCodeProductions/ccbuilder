@@ -13,7 +13,6 @@ T = TypeVar("T")
 
 def _save_db(func: Callable[..., T]) -> Callable[..., T]:
     def save_decorator(db: PatchDB, *args: list[Any], **kwargs: dict[Any, Any]) -> T:
-
         res = func(db, *args, **kwargs)
         with open(db.path, "w") as f:
             json.dump(db.data, f, indent=4)

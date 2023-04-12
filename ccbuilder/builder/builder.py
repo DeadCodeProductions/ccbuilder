@@ -400,7 +400,6 @@ class Builder(BuilderWithoutCache):
             if success_indicator.exists():
                 return install_path / postfix
             elif install_path.exists() and _worker_alive(worker_indicator):
-
                 logging.info(
                     f"This compiler seems to be built by some other worker. Need to wait. If there is no other worker, abort this command and run ccbuilder cache clean."
                 )

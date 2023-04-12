@@ -136,7 +136,6 @@ class Patcher:
         failure_is_good: bool = False,
         max_double_fail: int = 2,
     ) -> tuple[Commit, Commit]:
-
         good = good_rev
         bad = bad_rev
 
@@ -219,7 +218,6 @@ class Patcher:
         no_patch_common_ancestor = None
         oldest_patchable_ancestor = None
         for old_version in release_versions:
-
             logging.info(f"Testing for {old_version}")
             if not repo.is_branch_point_ancestor_wrt_master(
                 old_version, patchable_commit
