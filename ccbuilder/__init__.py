@@ -140,6 +140,11 @@ def ccbuilder_build_parser() -> ArgumentParser:
         "compiler", choices=["llvm", "gcc"], help="Which compiler to build and install"
     )
     parser.add_argument("revision", type=str, help="Target revision")
+    parser.add_argument(
+        "--additional-configure-flags",
+        type=str,
+        help="Additional flags to pass to configure/cmake",
+    )
     return parser
 
 
@@ -227,7 +232,14 @@ def handle_build(args: Namespace, bldr: BuilderWithoutCache) -> bool:
     patches = [Path(p.strip()).absolute() for p in args.patches] if args.patches else []
     if args.command == "build":
         project, _ = get_compiler_info(args.compiler, Path(args.repos_dir))
-        print(bldr.build(project, args.revision.strip(), additional_patches=patches))
+        print(
+            bldr.build(
+                project,
+                args.revision.strip(),
+                additional_patches=patches,
+                configure_flags=args.additional_configure_flags,
+            )
+        )
         return True
     return False
 
