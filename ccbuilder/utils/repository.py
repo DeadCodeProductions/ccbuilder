@@ -311,6 +311,14 @@ class Repo:
         except subprocess.SubprocessError as e:
             raise RepositoryException(e)
 
+    def tags(self) -> list[Revision]:
+        print_cmd = f"git -C {self.path} tag -l"
+        try:
+            res = utils.run_cmd(print_cmd, capture_output=True)
+        except subprocess.SubprocessError as e:
+            raise RepositoryException(e)
+        return res.splitlines()
+
 
 def get_llvm_repo(path_to_repo: Optional[Path] = None) -> Repo:
     if path_to_repo:
@@ -322,3 +330,53 @@ def get_gcc_repo(path_to_repo: Optional[Path] = None) -> Repo:
     if path_to_repo:
         return Repo(path_to_repo, "master")
     return Repo(DEFAULT_REPOS_DIR / "gcc", "master")
+
+
+def get_gcc_releases(repo: Repo) -> list[Revision]:
+    releases = []
+    for r in repo.tags():
+        if not r.startswith("releases/gcc-"):
+            continue
+        # We filter out older releases that we can't build
+        should_skip = False
+        for v in ("2", "3", "4", "5", "6"):
+            if r.startswith(f"releases/gcc-{v}."):
+                should_skip = True
+                break
+        if should_skip:
+            continue
+        releases.append(r)
+
+    return sorted(
+        releases, reverse=True, key=lambda x: int(x.split("-")[-1].replace(".", ""))
+    )
+
+
+def get_llvm_releases(repo: Repo) -> list[Revision]:
+    releases = []
+    for r in repo.tags():
+        if not r.startswith("llvmorg-"):
+            continue
+        if "-rc" in r or "init" in r:
+            continue
+        # We filter out older releases that we can't build
+        should_skip = False
+        for v in ("1", "2", "3", "4"):
+            if r.startswith(f"llvmorg-{v}."):
+                should_skip = True
+                break
+        if should_skip:
+            continue
+        releases.append(r)
+
+    return sorted(
+        releases, reverse=True, key=lambda x: int(x.split("-")[-1].replace(".", ""))
+    )
+
+
+def get_releases(project: utils.CompilerProject, repo: Repo) -> list[Revision]:
+    match project:
+        case utils.CompilerProject.GCC:
+            return get_gcc_releases(repo)
+        case utils.CompilerProject.LLVM:
+            return get_llvm_releases(repo)
