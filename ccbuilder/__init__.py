@@ -20,11 +20,11 @@ from ccbuilder.utils.repository import (
     Commit,
     get_gcc_repo,
     get_llvm_repo,
+    get_gcc_releases,
+    get_llvm_releases,
 )
 from ccbuilder.utils.utils import (
     CompilerProject,
-    MajorCompilerReleases,
-    CompilerReleases,
     get_compiler_info,
     get_compiler_project,
     find_cached_revisions,
@@ -124,6 +124,13 @@ def ccbuilder_base_parser() -> ArgumentParser:
         help="Path to the directory where log files should be stored in. If not specified, ccbuilder will print to stdout.",
         type=str,
     )
+
+    parser.add_argument(
+        "--print-releases",
+        action="store_true",
+        default=False,
+        help="Prints the available releases for GCC and LLVM",
+    )
     return parser
 
 
@@ -195,6 +202,22 @@ def handle_pull(args: Namespace) -> bool:
         llvm_repo = get_llvm_repo(Path(args.repos_dir) / "llvm-project")
         gcc_repo.pull()
         llvm_repo.pull()
+        return True
+    return False
+
+
+def handle_print_releases(args: Namespace) -> bool:
+    if args.print_releases:
+        print("GCC releases:")
+        for r in get_gcc_releases(get_gcc_repo(Path(args.repos_dir) / "gcc")):
+            print(r)
+
+        print("LLVM releases:")
+        for r in get_llvm_releases(
+            get_llvm_repo(Path(args.repos_dir) / "llvm-project")
+        ):
+            print(r)
+
         return True
     return False
 
@@ -281,6 +304,8 @@ def run_as_module() -> None:
     patchdb = PatchDB(Path(args.patches_dir) / "patchdb.json")
     cache_prefix = Path(args.cache_prefix.strip())
 
+    if handle_print_releases(args):
+        return
     if handle_pull(args):
         return
     if handle_cache(args, cache_prefix):

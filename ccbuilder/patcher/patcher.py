@@ -31,8 +31,13 @@ from ccbuilder.builder.builder import (
     BuildException,
 )
 from ccbuilder.patcher.patchdatabase import PatchDB
-from ccbuilder.utils.utils import CompilerReleases, CompilerProject
-from ccbuilder.utils.repository import Repo, Commit, Revision
+from ccbuilder.utils.utils import CompilerProject
+from ccbuilder.utils.repository import (
+    Repo,
+    Commit,
+    Revision,
+    get_releases,
+)
 
 
 class PatchingResult(Enum):
@@ -211,7 +216,7 @@ class Patcher:
 
         # For now, just assume this is sorted in descending release-recency
         # Using commit dates doesn't really work
-        release_versions = ["trunk"] + CompilerReleases[project]
+        release_versions = ["trunk"] + get_releases(project, repo)
         release_versions.reverse()
 
         tested_ancestors: list[Commit] = []
@@ -365,7 +370,7 @@ class Patcher:
         # Find reachable releases
         reachable_releases = [
             repo.rev_to_commit(release)
-            for release in CompilerReleases[project]
+            for release in get_releases(project, repo)
             if repo.is_ancestor(introducer, release)
         ]
 
@@ -495,7 +500,7 @@ class Patcher:
         logging.info(f"Looking for introducer commit starting at {broken_rev}")
 
         oldest_possible_commit = repo.get_best_common_ancestor(
-            CompilerReleases[project][-1], "main"
+            get_releases(project, repo)[-1], "main"
         )
 
         # === Introducer
