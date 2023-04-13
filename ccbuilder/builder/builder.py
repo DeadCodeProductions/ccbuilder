@@ -1,4 +1,5 @@
 import logging
+import json
 import multiprocessing
 import os
 import sys
@@ -135,7 +136,9 @@ def patch_if_necessary(
             raise BuildException(f"Could not apply patches: {patches}")
 
 
-def llvm_build_and_install(install_prefix: Path, jobs: int, log_file: TextIO) -> None:
+def llvm_build_and_install(
+    install_prefix: Path, jobs: int, log_file: TextIO, configure_flags: str | None
+) -> None:
     """Build and install LLVM. Must only be called in a `BuildContext`.
     May raise a `CalledProcessError`.
 
@@ -143,13 +146,21 @@ def llvm_build_and_install(install_prefix: Path, jobs: int, log_file: TextIO) ->
         install_prefix (Path): Install prefix for the build (in the cache).
         jobs (int): Amount of jobs to build with
         log_file (TextIO): File to log the build process to.
+        configure_flags (str | None): additional flags to pass to the configure script or cmake.
 
     Returns:
         None:
     """
     os.chdir("build")
     logging.debug("LLVM: Starting cmake")
-    cmake_cmd = f"cmake ../llvm -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS=clang -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_USE_NEWPM=ON -DLLVM_TARGETS_TO_BUILD=X86 -DCMAKE_INSTALL_PREFIX={install_prefix} -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON"
+    cmake_cmd = (
+        "cmake ../llvm -G Ninja -DCMAKE_BUILD_TYPE=Release "
+        "-DLLVM_ENABLE_PROJECTS=clang -DLLVM_INCLUDE_BENCHMARKS=OFF "
+        "-DLLVM_INCLUDE_TESTS=OFF -DLLVM_USE_NEWPM=ON -DLLVM_TARGETS_TO_BUILD=X86 "
+        f"-DCMAKE_INSTALL_PREFIX={install_prefix} -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON"
+    )
+    if configure_flags:
+        cmake_cmd += " " + configure_flags
 
     run_cmd_to_logfile(
         cmake_cmd, additional_env={"CC": "clang", "CXX": "clang++"}, log_file=log_file
@@ -159,7 +170,9 @@ def llvm_build_and_install(install_prefix: Path, jobs: int, log_file: TextIO) ->
     run_cmd_to_logfile(f"ninja -j {jobs} install", log_file=log_file)
 
 
-def gcc_build_and_install(install_prefix: Path, jobs: int, log_file: TextIO) -> None:
+def gcc_build_and_install(
+    install_prefix: Path, jobs: int, log_file: TextIO, configure_flags: str | None
+) -> None:
     """Build and install GCC. Must only be called in a `BuildContext`.
     May raise a `CalledProcessError`.
 
@@ -167,6 +180,7 @@ def gcc_build_and_install(install_prefix: Path, jobs: int, log_file: TextIO) -> 
         install_prefix (Path): Install prefix for the build (in the cache).
         jobs (int): Amount of jobs to build with
         log_file (TextIO): File to log the build process to.
+        configure_flags (str | None): additional flags to pass to the configure script or cmake.
 
     Returns:
         None:
@@ -181,6 +195,8 @@ def gcc_build_and_install(install_prefix: Path, jobs: int, log_file: TextIO) -> 
         "../configure --disable-multilib --disable-bootstrap"
         f" --enable-languages=c,c++ --prefix={install_prefix}"
     )
+    if configure_flags:
+        configure_cmd += " " + configure_flags
     run_cmd_to_logfile(configure_cmd, log_file=log_file)
 
     logging.debug("GCC: Starting to build...")
@@ -189,15 +205,19 @@ def gcc_build_and_install(install_prefix: Path, jobs: int, log_file: TextIO) -> 
 
 
 def _run_build_and_install(
-    project: CompilerProject, install_path: Path, cores: int, log_file: TextIO
+    project: CompilerProject,
+    install_path: Path,
+    cores: int,
+    log_file: TextIO,
+    configure_flags: str | None,
 ) -> Path:
     os.makedirs("build")
     try:
         match project:
             case CompilerProject.GCC:
-                gcc_build_and_install(install_path, cores, log_file)
+                gcc_build_and_install(install_path, cores, log_file, configure_flags)
             case CompilerProject.LLVM:
-                llvm_build_and_install(install_path, cores, log_file)
+                llvm_build_and_install(install_path, cores, log_file, configure_flags)
     except subprocess.CalledProcessError as e:
         raise BuildException(f"Build failed: {e}")
     return install_path
@@ -245,6 +265,7 @@ def build_and_install_compiler(
     get_executable: bool = False,
     jobs: Optional[int] = None,
     additional_patches: Optional[list[Path]] = None,
+    configure_flags: str | None = None,
     logdir: Optional[Path] = None,
 ) -> Path:
     """Build and install a compiler specified via `project` and `rev`.
@@ -261,6 +282,7 @@ def build_and_install_compiler(
         get_executable (bool): Whether or not to return the path to the executable compiler instead.
         jobs (Optional[int]): Amount of jobs
         additional_patches (Optional[list[Path]]): Additional patches to apply.
+        configure_flags (str | None): additional flags to pass to the configure script or cmake.
         logdir (Optional[Path]): Path to where the build logs are saved.
 
     Returns:
@@ -293,8 +315,17 @@ def build_and_install_compiler(
             install_prefix,
             jobs if jobs else multiprocessing.cpu_count(),
             build_log,
+            configure_flags,
         )
         success_indicator.touch()
+        with open(success_indicator, "w") as f:
+            json.dump(
+                {
+                    "revision": rev,
+                    "configure": configure_flags if configure_flags else "",
+                },
+                f,
+            )
     repo.prune_worktree()
     if get_executable:
         return res / get_executable_postfix(project)
@@ -326,6 +357,7 @@ class BuilderWithoutCache:
         rev: Revision,
         get_executable: bool = False,
         additional_patches: Optional[list[Path]] = None,
+        configure_flags: str | None = None,
         jobs: Optional[int] = None,
     ) -> Path:
         if not jobs and not self.jobs:
@@ -343,6 +375,7 @@ class BuilderWithoutCache:
             get_executable=get_executable,
             jobs=jobs,
             additional_patches=additional_patches,
+            configure_flags=configure_flags,
             logdir=self.logdir,
         )
 
@@ -369,6 +402,7 @@ class Builder(BuilderWithoutCache):
         rev: str,
         get_executable: bool = False,
         additional_patches: Optional[list[Path]] = None,
+        configure_flags: str | None = None,
         jobs: Optional[int] = None,
         force: bool = False,
     ) -> Path:
@@ -382,6 +416,7 @@ class Builder(BuilderWithoutCache):
             get_executable (bool): Whether or not to return the path to the executable compiler instead.
             additional_patches (Optional[list[Path]]): Additional patches to apply.
             jobs (Optional[int]): Amount of jobs to use for the building.
+            configure_flags (str | None): additional flags to pass to the configure script or cmake.
             force (bool): Build the specified compiler even if it has been cached before.
 
         Returns:
@@ -430,5 +465,6 @@ class Builder(BuilderWithoutCache):
             rev,
             get_executable=get_executable,
             additional_patches=additional_patches,
+            configure_flags=configure_flags,
             jobs=jobs,
         )
