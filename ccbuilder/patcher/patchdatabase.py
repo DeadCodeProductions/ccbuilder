@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
-from ccbuilder.utils.utils import CompilerProject
+from diopter.compiler import CompilerProject
 
 T = TypeVar("T")
 

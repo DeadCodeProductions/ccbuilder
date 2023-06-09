@@ -8,7 +8,8 @@ from enum import Enum
 from pathlib import Path
 from typing import TextIO, Literal, Union
 
-import ccbuilder.utils.repository as repository
+import diopter.repository as repository
+from diopter.compiler import CompilerProject
 
 
 def run_cmd(
@@ -37,14 +38,6 @@ def run_cmd_to_logfile(
         env=env,
         capture_output=False,
     )
-
-
-class CompilerProject(Enum):
-    GCC = 0
-    LLVM = 1
-
-    def to_string(self) -> str:
-        return "gcc" if self == CompilerProject.GCC else "clang"
 
 
 def select_repo(
@@ -82,43 +75,17 @@ def get_compiler_info(
 ) -> tuple[CompilerProject, repository.Repo]:
     match project_name:
         case "gcc":
-            repo = repository.Repo(repo_dir_prefix / "gcc", "master")
+            repo = repository.Repo(
+                repo_dir_prefix / "gcc", repository.Revision("master")
+            )
             return CompilerProject.GCC, repo
         case "llvm" | "clang":
-            repo = repository.Repo(repo_dir_prefix / "llvm-project", "main")
+            repo = repository.Repo(
+                repo_dir_prefix / "llvm-project", repository.Revision("main")
+            )
             return CompilerProject.LLVM, repo
         case _:
             raise Exception(f"Unknown compiler project {project_name}!")
-
-
-def find_cached_revisions(
-    project: CompilerProject, cache_prefix: Path
-) -> list[repository.Commit]:
-    """Get all commits of `project` that have been built and cached in `cache_prefix`.
-
-    Args:
-        project (CompilerProject): Project to get commits for.
-        cache_prefix (Path): Path to cache.
-
-    Returns:
-        list[repository.Commit]:
-    """
-    match project:
-        case CompilerProject.GCC:
-            compiler_name = "gcc"
-        case CompilerProject.LLVM:
-            compiler_name = "clang"
-
-    compilers: list[str] = []
-
-    for entry in Path(cache_prefix).iterdir():
-        if entry.is_symlink() or not entry.stem.startswith(compiler_name):
-            continue
-        if not (entry / "bin" / compiler_name).exists():
-            continue
-        rev = str(entry).split("-")[-1]
-        compilers.append(rev)
-    return compilers
 
 
 def initialize_repos(repos_dir: str) -> None:

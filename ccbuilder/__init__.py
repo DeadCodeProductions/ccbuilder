@@ -5,15 +5,7 @@ from multiprocessing import cpu_count
 from pathlib import Path
 from typing import Optional
 
-from ccbuilder.builder.builder import (
-    build_and_install_compiler,
-    BuilderWithoutCache,
-    Builder,
-    BuildException,
-)
-from ccbuilder.patcher.patchdatabase import PatchDB
-from ccbuilder.patcher.patcher import Patcher
-from ccbuilder.utils.repository import (
+from diopter.repository import (
     Repo,
     RepositoryException,
     Revision,
@@ -22,20 +14,32 @@ from ccbuilder.utils.repository import (
     get_llvm_repo,
     get_gcc_releases,
     get_llvm_releases,
+    DEFAULT_REPOS_DIR,
 )
+from diopter.compiler import CompilerProject
+
+from ccbuilder.builder.builder import (
+    build_and_install_compiler,
+    Builder,
+    BuildException,
+)
+from ccbuilder.patcher.patchdatabase import PatchDB
+from ccbuilder.patcher.patcher import Patcher
 from ccbuilder.utils.utils import (
-    CompilerProject,
     get_compiler_info,
     get_compiler_project,
-    find_cached_revisions,
     initialize_repos,
     initialize_patches_dir,
 )
-
+from ccbuilder.compilerstore import (
+    CompilerStore,
+    scan_directory_and_populate_store,
+    load_compiler_store,
+    default_store_file,
+)
 from ccbuilder.defaults import (
     DEFAULT_PREFIX_PARENT_PATH,
     DEFAULT_PATCH_DIR,
-    DEFAULT_REPOS_DIR,
 )
 
 __all__ = [
@@ -54,7 +58,6 @@ __all__ = [
     "MajorCompilerReleases",
     "get_gcc_repo",
     "get_llvm_repo",
-    "find_cached_revisions",
     "get_compiler_info",
     "get_compiler_project",
     "initialize_repos",
@@ -176,9 +179,13 @@ def ccbuilder_cache_parser() -> ArgumentParser:
     parser = ArgumentParser(add_help=False)
     parser.add_argument(
         "action",
-        choices=("clean", "stats"),
+        choices=("clean", "stats", "scan"),
         type=str,
-        help="What you want to do with the cache. Clean will search and remove all unfinished cache entries. `stats` will print some statistics about the cache.",
+        help="What you want to do with the cache. "
+        "Clean will search and remove all unfinished cache entries. "
+        "`stats` will print some statistics about the cache."
+        "`scan` will scan the given directory for compilers and (re-)compute "
+        "the necesary metadata required for retrieving compilers, bisecting, etc.",
     )
     return parser
 
@@ -227,7 +234,7 @@ def handle_print_releases(args: Namespace) -> bool:
     return False
 
 
-def handle_build(args: Namespace, bldr: BuilderWithoutCache) -> bool:
+def handle_build(args: Namespace, bldr: Builder) -> bool:
     # TODO: handle separate repo inputs?
     patches = [Path(p.strip()).absolute() for p in args.patches] if args.patches else []
     if args.command == "build":
@@ -238,7 +245,7 @@ def handle_build(args: Namespace, bldr: BuilderWithoutCache) -> bool:
                 args.revision.strip(),
                 additional_patches=patches,
                 configure_flags=args.additional_configure_flags,
-            )
+            ).prefix
         )
         return True
     return False
@@ -266,8 +273,10 @@ def handle_patch(args: Namespace, bldr: Builder, patchdb: PatchDB) -> bool:
 
 
 def handle_cache(args: Namespace, cache_prefix: Path) -> bool:
-    if args.command == "cache":
-        if args.action == "clean":
+    if args.command != "cache":
+        return False
+    match args.action:
+        case "clean":
             print("Cleaning...")
             for c in cache_prefix.iterdir():
                 if c == (cache_prefix / "logs"):
@@ -280,24 +289,33 @@ def handle_cache(args: Namespace, cache_prefix: Path) -> bool:
                     except OSError:
                         print(c, "is not empty but also not done!")
             print("Done")
-        elif args.action == "stats":
-            count_gcc = 0
-            count_clang = 0
-            for c in cache_prefix.iterdir():
-                if c.name.startswith("llvm"):
-                    count_clang += 1
-                else:
-                    count_gcc += 1
-
+        case "stats":
+            store_filename = default_store_file(cache_prefix)
+            if not store_filename.exists():
+                print(
+                    "No compiler store metadata found. Run `ccbuilder cache scan` first."
+                )
+                exit(0)
+            store = load_compiler_store(store_filename)
+            count_clang = len(store.built_commits(CompilerProject.LLVM))
+            count_gcc = len(store.built_commits(CompilerProject.GCC))
             tot = count_gcc + count_clang
             print("Amount compilers:", tot)
+            print(f"Amount LLVM: {count_clang} {count_clang / tot :.2%}")
+            print(f"Amount GCC: {count_gcc} {count_gcc / tot:.2%}")
+        case "scan":
+            print("Scanning...")
+            store = load_compiler_store(default_store_file(cache_prefix))
+            scan_directory_and_populate_store(cache_prefix, store)
+            print("Done")
             print(
-                "Amount clang: {} {:.2f}%".format(count_clang, count_clang / tot * 100)
+                f"{len(store.built_commits(CompilerProject.GCC))} gcc compilers found"
             )
-            print("Amount GCC: {} {:.2f}%".format(count_gcc, count_gcc / tot * 100))
+            print(
+                f"{len(store.built_commits(CompilerProject.LLVM))} llvm compilers found"
+            )
 
-        return True
-    return False
+    return True
 
 
 def run_as_module() -> None:
@@ -325,6 +343,7 @@ def run_as_module() -> None:
     repo_dir_prefix = Path(args.repos_dir)
     llvm_repo = get_llvm_repo(repo_dir_prefix / "llvm-project")
     gcc_repo = get_gcc_repo(repo_dir_prefix / "gcc")
+    store = load_compiler_store(default_store_file(cache_prefix))
 
     if args.logdir:
         logdir = Path(args.logdir).absolute()
@@ -336,6 +355,7 @@ def run_as_module() -> None:
         Path(args.cache_prefix.strip()).absolute(),
         gcc_repo=gcc_repo,
         llvm_repo=llvm_repo,
+        cstore=store,
         patchdb=patchdb,
         logdir=logdir,
         jobs=args.jobs,
