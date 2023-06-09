@@ -12,10 +12,12 @@ from pathlib import Path
 from types import TracebackType
 from typing import Optional, TextIO
 
+from diopter.repository import Repo, Revision, Commit
+from diopter.compiler import CompilerProject
+
 from ccbuilder.patcher.patchdatabase import PatchDB
-from ccbuilder.utils.repository import Repo, Revision, Commit
+from ccbuilder.compilerstore import CompilerStore, BuiltCompilerInfo
 from ccbuilder.utils.utils import (
-    CompilerProject,
     run_cmd_to_logfile,
     select_repo,
 )
@@ -25,11 +27,29 @@ class BuildException(Exception):
     pass
 
 
+class DuplicateBuildException(Exception):
+    pass
+
+
+def _worker_alive(worker_indicator: Path) -> bool:
+    if worker_indicator.exists():
+        with open(worker_indicator, "r") as f:
+            worker_pid = int(f.read())
+        try:
+            # Signal to ~check if a process is alive
+            # from man 1 kill
+            # > If signal is 0, then no actual signal is sent, but error checking is still performed.
+            os.kill(worker_pid, 0)
+            return True
+        except OSError:
+            return False
+    return False
+
+
 @dataclass
 class BuildContext:
     """Creates a temporary directory for a build, creates the install prefix
-    and manages the 'communication' between building processes s.t. a compiler is
-    not built twice.
+    and ensures that a compiler is not built twice.
     """
 
     install_prefix: Path
@@ -41,6 +61,14 @@ class BuildContext:
     def __enter__(self) -> tuple[Path, TextIO]:
         self.build_dir = tempfile.mkdtemp()
         os.makedirs(self.install_prefix, exist_ok=True)
+        worker_pid_file = self.install_prefix / "WORKER_PID"
+
+        if worker_pid_file.exists():
+            if _worker_alive(worker_pid_file):
+                raise DuplicateBuildException(
+                    "The compiler is either being built by another process "
+                    "or the cache in a bad state (run ccbuilder cache clean to fix)."
+                )
 
         # Write worker PID
         with open(self.install_prefix / "WORKER_PID", "w") as f:
@@ -246,23 +274,13 @@ def get_install_path(
     return cache_prefix / f"{install_name_prefix}-{commit}"
 
 
-def get_executable_postfix(project: CompilerProject) -> Path:
-    match project:
-        case CompilerProject.LLVM:
-            executable_name = "clang"
-        case CompilerProject.GCC:
-            executable_name = "gcc"
-    return Path("bin") / executable_name
-
-
 def build_and_install_compiler(
     project: CompilerProject,
-    rev: Revision,
+    rev: Revision | Commit,
     cache_prefix: Path,
     llvm_repo: Repo,
     gcc_repo: Repo,
     patchdb: PatchDB,
-    get_executable: bool = False,
     jobs: Optional[int] = None,
     additional_patches: Optional[list[Path]] = None,
     configure_flags: str | None = None,
@@ -279,14 +297,13 @@ def build_and_install_compiler(
         llvm_repo (Repo): LLVM repository
         gcc_repo (Repo): GCC repository
         patchdb (PatchDB): The PatchDB to use.
-        get_executable (bool): Whether or not to return the path to the executable compiler instead.
         jobs (Optional[int]): Amount of jobs
         additional_patches (Optional[list[Path]]): Additional patches to apply.
         configure_flags (str | None): additional flags to pass to the configure script or cmake.
         logdir (Optional[Path]): Path to where the build logs are saved.
 
     Returns:
-        Path: `cache_prefix`/projectname-commit or `cache_prefix`/projectname-commit/bin/$compiler if `get_executable` is set.
+        Path: `cache_prefix`/projectname-commit
     """
 
     repo = select_repo(project, llvm_repo, gcc_repo)
@@ -296,48 +313,51 @@ def build_and_install_compiler(
 
     if logdir:
         logdir.mkdir(exist_ok=True, parents=True)
-    with BuildContext(install_prefix, success_indicator, project, commit, logdir) as (
-        tmpdir,
-        build_log,
-    ):
-        run_cmd_to_logfile(
-            f"git -C {str(repo.path)} worktree" f" add {tmpdir} {commit} -f",
-            log_file=build_log,
-        )
-        patch_if_necessary(
-            commit,
-            patchdb,
-            Path(tmpdir),
-            additional_patches if additional_patches else [],
-        )
-        res = _run_build_and_install(
-            project,
-            install_prefix,
-            jobs if jobs else multiprocessing.cpu_count(),
+    try:
+        with BuildContext(
+            install_prefix, success_indicator, project, commit, logdir
+        ) as (
+            tmpdir,
             build_log,
-            configure_flags,
-        )
-        success_indicator.touch()
-        with open(success_indicator, "w") as f:
-            json.dump(
-                {
-                    "revision": rev,
-                    "configure": configure_flags if configure_flags else "",
-                },
-                f,
+        ):
+            run_cmd_to_logfile(
+                f"git -C {str(repo.path)} worktree" f" add {tmpdir} {commit} -f",
+                log_file=build_log,
             )
-    repo.prune_worktree()
-    if get_executable:
-        return res / get_executable_postfix(project)
+            patch_if_necessary(
+                commit,
+                patchdb,
+                Path(tmpdir),
+                additional_patches if additional_patches else [],
+            )
+            res = _run_build_and_install(
+                project,
+                install_prefix,
+                jobs if jobs else multiprocessing.cpu_count(),
+                build_log,
+                configure_flags,
+            )
+            success_indicator.touch()
+            with open(success_indicator, "w") as f:
+                json.dump(
+                    {
+                        "revision": rev,
+                        "configure": configure_flags if configure_flags else "",
+                    },
+                    f,
+                )
+    finally:
+        repo.prune_worktree()
     return res
 
 
-class BuilderWithoutCache:
+class Builder:
     def __init__(
         self,
         cache_prefix: Path,
         gcc_repo: Repo,
         llvm_repo: Repo,
+        cstore: CompilerStore,
         patchdb: Optional[PatchDB] = None,
         jobs: Optional[int] = None,
         logdir: Optional[Path] = None,
@@ -345,6 +365,7 @@ class BuilderWithoutCache:
         self.cache_prefix = cache_prefix
         self.gcc_repo = gcc_repo
         self.llvm_repo = llvm_repo
+        self.cstore = cstore
 
         pdb = patchdb if patchdb else PatchDB()
         self.patchdb = pdb
@@ -354,58 +375,12 @@ class BuilderWithoutCache:
     def build(
         self,
         project: CompilerProject,
-        rev: Revision,
-        get_executable: bool = False,
-        additional_patches: Optional[list[Path]] = None,
-        configure_flags: str | None = None,
-        jobs: Optional[int] = None,
-    ) -> Path:
-        if not jobs and not self.jobs:
-            jobs = multiprocessing.cpu_count()
-        elif not jobs:
-            jobs = self.jobs
-
-        return build_and_install_compiler(
-            project=project,
-            rev=rev,
-            cache_prefix=self.cache_prefix,
-            llvm_repo=self.llvm_repo,
-            gcc_repo=self.gcc_repo,
-            patchdb=self.patchdb,
-            get_executable=get_executable,
-            jobs=jobs,
-            additional_patches=additional_patches,
-            configure_flags=configure_flags,
-            logdir=self.logdir,
-        )
-
-
-def _worker_alive(worker_indicator: Path) -> bool:
-    if worker_indicator.exists():
-        with open(worker_indicator, "r") as f:
-            worker_pid = int(f.read())
-        try:
-            # Signal to ~check if a process is alive
-            # from man 1 kill
-            # > If signal is 0, then no actual signal is sent, but error checking is still performed.
-            os.kill(worker_pid, 0)
-            return True
-        except OSError:
-            return False
-    return False
-
-
-class Builder(BuilderWithoutCache):
-    def build(
-        self,
-        project: CompilerProject,
-        rev: str,
-        get_executable: bool = False,
+        rev: Revision | Commit,
         additional_patches: Optional[list[Path]] = None,
         configure_flags: str | None = None,
         jobs: Optional[int] = None,
         force: bool = False,
-    ) -> Path:
+    ) -> BuiltCompilerInfo:
         """Build the specified compiler and return the path to the installation location.
         If the specified compiler has already been built, `build` will return the cached path.
 
@@ -413,58 +388,46 @@ class Builder(BuilderWithoutCache):
             self:
             project (CompilerProject): Project to build.
             rev (str): Revision of the project to build.
-            get_executable (bool): Whether or not to return the path to the executable compiler instead.
             additional_patches (Optional[list[Path]]): Additional patches to apply.
             jobs (Optional[int]): Amount of jobs to use for the building.
             configure_flags (str | None): additional flags to pass to the configure script or cmake.
             force (bool): Build the specified compiler even if it has been cached before.
 
         Returns:
-            Path: `cache_prefix`/projectname-commit or `cache_prefix`/projectname-commit/bin/$compiler if `get_executable` is set.
+            Path: `cache_prefix`/projectname-commit
         """
-
         repo = select_repo(project, self.llvm_repo, self.gcc_repo)
-        commit = repo.rev_to_commit(rev)
-        install_path = get_install_path(self.cache_prefix, project, commit)
-        success_indicator = install_path / "DONE"
-        worker_indicator = install_path / "WORKER_PID"
+        commit = repo.rev_to_commit(rev.strip())
+        if built_compiler_info := self.cstore.get_built_compiler(project, commit):
+            return built_compiler_info
+        if self.cstore.has_previously_failed_to_build(project, commit) and not force:
+            raise BuildException(
+                f"Compiler {project} {commit} has previously failed to build.\n"
+                "Run with force==True (--force) to try again."
+            )
 
-        postfix: Path = get_executable_postfix(project) if get_executable else Path()
+        if not jobs and not self.jobs:
+            jobs = multiprocessing.cpu_count()
+        elif not jobs:
+            jobs = self.jobs
 
-        if not force:
-            if success_indicator.exists():
-                return install_path / postfix
-            elif install_path.exists() and _worker_alive(worker_indicator):
-                logging.info(
-                    f"This compiler seems to be built by some other worker. Need to wait. If there is no other worker, abort this command and run ccbuilder cache clean."
-                )
-                start_time = time.time()
-                counter = 0
-                while (
-                    _worker_alive(worker_indicator)
-                    and not success_indicator.exists()
-                    and install_path.exists()
-                ):
-                    time.sleep(1)
-                    if time.time() - start_time > 15 * 60:
-                        counter += 1
-                        logging.info(
-                            f"{counter*15} minutes have passed waiting. Maybe the cache is in an inconsistent state."
-                        )
-                        start_time = time.time()
+        try:
+            install_prefix = build_and_install_compiler(
+                project=project,
+                rev=rev,
+                cache_prefix=self.cache_prefix,
+                llvm_repo=self.llvm_repo,
+                gcc_repo=self.gcc_repo,
+                patchdb=self.patchdb,
+                jobs=jobs,
+                additional_patches=additional_patches,
+                configure_flags=configure_flags,
+                logdir=self.logdir,
+            )
+        except BuildException as e:
+            self.cstore.add_failed_to_build_compiler(project, commit)
+            raise e
 
-                if success_indicator.exists():
-                    return install_path / postfix
-
-                # Someone was building but did not leave the success_indicator
-                # so something went wrong with the build.
-                raise BuildException(f"Other build attempt failed for {install_path}")
-
-        return super().build(
-            project,
-            rev,
-            get_executable=get_executable,
-            additional_patches=additional_patches,
-            configure_flags=configure_flags,
-            jobs=jobs,
-        )
+        compiler_info = BuiltCompilerInfo(project, install_prefix, commit)
+        self.cstore.add_compiler(compiler_info)
+        return compiler_info

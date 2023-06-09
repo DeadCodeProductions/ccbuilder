@@ -26,18 +26,21 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from ccbuilder.builder.builder import (
-    Builder,
-    BuildException,
-)
-from ccbuilder.patcher.patchdatabase import PatchDB
-from ccbuilder.utils.utils import CompilerProject
-from ccbuilder.utils.repository import (
+from diopter.repository import (
     Repo,
     Commit,
     Revision,
     get_releases,
 )
+
+from diopter.compiler import CompilerProject
+
+
+from ccbuilder.builder.builder import (
+    Builder,
+    BuildException,
+)
+from ccbuilder.patcher.patchdatabase import PatchDB
 
 
 class PatchingResult(Enum):
@@ -56,7 +59,7 @@ class Patcher:
     def _build(
         self,
         project: CompilerProject,
-        rev: Revision,
+        rev: Revision | Commit,
         additional_patches: list[Path] = [],
     ) -> None:
         self.builder.build(project, rev=rev, additional_patches=additional_patches)
@@ -65,7 +68,7 @@ class Patcher:
         self,
         project: CompilerProject,
         repo: Repo,
-        rev: Revision,
+        rev: Revision | Commit,
         patches: list[Path],
     ) -> PatchingResult:
         if not self.patchdb.requires_all_these_patches(
@@ -100,9 +103,9 @@ class Patcher:
         repo: Repo,
         double_fail_counter: int,
         max_double_fail: int,
-        bad: Revision,
-        midpoint: Revision,
-        good: Revision,
+        bad: Commit,
+        midpoint: Commit,
+        good: Commit,
     ) -> Commit:
         """
         Move the midpoint either forwards or backwards (depending on the double_fail_counter)
@@ -151,7 +154,7 @@ class Patcher:
         encountered_double_fail = False
 
         # Bisection
-        midpoint: str = ""
+        midpoint = Commit("")
         while True:
             if encountered_double_fail:
                 midpoint = self._adjust_bisection_midpoint_after_failure(
@@ -225,7 +228,7 @@ class Patcher:
         for old_version in release_versions:
             logging.info(f"Testing for {old_version}")
             if not repo.is_branch_point_ancestor_wrt_master(
-                old_version, patchable_commit
+                Revision(old_version), Revision(patchable_commit)
             ):
                 if oldest_patchable_ancestor:
                     # XXX: Would something like "All older releases require
@@ -339,7 +342,7 @@ class Patcher:
             # Insert from introducer to and with patchable_commit as requiring patching
             # This is of course not the complete range but will help when bisecting
             rev_range = f"{introducer}~..{patchable_commit}"
-            commit_list = repo.rev_to_commit_list(rev_range)
+            commit_list = repo.rev_to_commit_list(Revision(rev_range))
             for patch in patches:
                 self.patchdb.save(patch, commit_list, repo)
 
@@ -374,7 +377,7 @@ class Patcher:
             if repo.is_ancestor(introducer, release)
         ]
 
-        last_needing_patch_list: list[str] = []
+        last_needing_patch_list: list[Commit] = []
         for release in reachable_releases:
             logging.info(f"Searching fixer for release {release}")
 
@@ -403,7 +406,9 @@ class Patcher:
 
             elif patching_result is PatchingResult.BuildsWithPatching:
                 # release only builds with patch, everything to release is to be included
-                commits = repo.rev_to_commit_list(f"{introducer}~1..{release}")
+                commits = repo.rev_to_commit_list(
+                    Revision(f"{introducer}~1..{release}")
+                )
                 for patch in patches:
                     self.patchdb.save(patch, commits, repo)
                 continue
@@ -512,7 +517,9 @@ class Patcher:
         current_commit = broken_rev
         while True:
             prev_commit = current_commit
-            current_commit = repo.rev_to_commit(broken_rev + f"~{2**exp + 10}")
+            current_commit = Revision(
+                repo.rev_to_commit(broken_rev + f"~{2**exp + 10}")
+            )
             is_ancestor = repo.is_ancestor(oldest_possible_commit, current_commit)
             if hit_upper_bound:
                 msg = (
@@ -522,7 +529,7 @@ class Patcher:
                 raise Exception(msg)
 
             if not is_ancestor and not hit_upper_bound:
-                current_commit = oldest_possible_commit
+                current_commit = Revision(oldest_possible_commit)
                 hit_upper_bound = True
 
             try:
@@ -540,8 +547,8 @@ class Patcher:
         logging.info(msg)
         print(msg)
         _, introducer = self.bisect_build(
-            good=current_commit,
-            bad=prev_commit,
+            good=Commit(current_commit),
+            bad=Commit(prev_commit),
             project=project,
             repo=repo,
             failure_is_good=False,
