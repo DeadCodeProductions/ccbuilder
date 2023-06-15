@@ -80,6 +80,8 @@ class CompilerStore:
     def add_failed_to_build_compiler(
         self, project: CompilerProject, commit: Commit
     ) -> None:
+        if self.has_previously_failed_to_build(project, commit):
+            return
         with self.con:
             self.con.execute(
                 "INSERT INTO failed_compiler_builts VALUES (?, ?)",
@@ -161,6 +163,8 @@ class CompilerStore:
         revision = repo.rev_to_commit(revision)
         lower_bound = repo.rev_to_commit(lower_bound)
         upper_bound = repo.rev_to_commit(upper_bound)
+        assert repo.is_ancestor(revision, upper_bound)
+
         if built := self.get_built_compiler(project, revision):
             return built
         built_commits = set(self.built_commits(project))
@@ -171,20 +175,22 @@ class CompilerStore:
                 list(
                     c
                     for c in repo.direct_first_parent_path(lower_bound, upper_bound)
-                    if c in built_commits or c == revision
+                    if (c in built_commits or c == revision)
+                    and c != lower_bound
+                    and c != upper_bound
                 )
             )
         )
-        assert revision in commits, f"{revision} not in {lower_bound}...{upper_bound}"
 
-        if lower_bound == commits[0]:
-            commits = commits[1:]
-        if upper_bound == commits[-1]:
-            commits = commits[:-1]
-
-        # Temporary asserts, to make sure that the algorithm is correct
-        assert lower_bound not in commits
-        assert upper_bound not in commits
+        if revision not in commits:
+            # We must be testing a lower bound merge base
+            assert repo.is_ancestor(
+                revision, lower_bound
+            ), f"{revision} not in {lower_bound}...{upper_bound}"
+            if commits:
+                return self.get_built_compiler(project, commits[0])
+            else:
+                return None
 
         if len(commits) == 1:
             return None
@@ -233,11 +239,5 @@ def scan_directory_and_populate_store(path: Path, store: CompilerStore) -> None:
 
 
 def load_compiler_store(path: Path) -> CompilerStore:
-    if path.exists():
-        if path.stat().st_mtime < path.parent.parent.stat().st_mtime:
-            print(
-                f"WARNING: Compiler store {path} is older than its parent "
-                f"directory {path.parent.parent}, run ccbuilber cache scan"
-            )
     path.parent.mkdir(parents=True, exist_ok=True)
     return CompilerStore(path)
