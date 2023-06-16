@@ -65,7 +65,7 @@ class CompilerStore:
                     (compiler.project.name, compiler.commit, str(compiler.prefix))
                 )
             if self.has_previously_failed_to_build(compiler.project, compiler.commit):
-                remove_from_failed.append((compiler.project, compiler.commit))
+                remove_from_failed.append((compiler.project.name, compiler.commit))
 
         with self.con:
             self.con.executemany(
@@ -95,6 +95,14 @@ class CompilerStore:
         ).fetchone()
         return result is not None
 
+    def failed_to_build_compilers(self) -> list[tuple[CompilerProject, Commit]]:
+        return [
+            (p, Commit(c))
+            for p, c in self.con.execute(
+                "SELECT project, commit_ FROM failed_compiler_builts"
+            )
+        ]
+
     def remove_from_previously_failed_to_build(
         self, project: CompilerProject, commit: Commit
     ) -> None:
@@ -103,6 +111,10 @@ class CompilerStore:
                 "DELETE FROM failed_compiler_builts WHERE project=? AND commit_=?",
                 (project.name, commit),
             )
+
+    def clear_previously_failed_to_build(self) -> None:
+        with self.con:
+            self.con.execute("DELETE FROM failed_compiler_builts")
 
     def remove_compiler(self, project: CompilerProject, commit: Commit) -> None:
         with self.con:

@@ -15,8 +15,8 @@ from typing import Optional, TextIO
 from diopter.repository import Repo, Revision, Commit
 from diopter.compiler import CompilerProject
 
-from ccbuilder.patcher.patchdatabase import PatchDB
 from ccbuilder.compilerstore import CompilerStore, BuiltCompilerInfo
+from ccbuilder.defaults import DEFAULT_PATCH_DIR
 from ccbuilder.utils.utils import (
     run_cmd_to_logfile,
     select_repo,
@@ -108,60 +108,35 @@ class BuildContext:
             shutil.rmtree(self.install_prefix)
 
 
-def apply_patches(git_dir: Path, patches: list[Path]) -> bool:
-    """Applies the given `patches` to `git_dir` in the order defined by `patches`.
+def apply_patches(
+    git_dir: Path, project: CompilerProject, patches_dir: Path, log_file: TextIO
+) -> None:
+    """Applies the known patches to `git_dir`.
 
     Args:
         git_dir (Path): Path to git repository to apply the patches to.
-        patches (list[Path]): List of patches to apply.
-
-    Returns:
-        bool: True if it was possible to apply all the patches.
+        project (CompilerProject)
+        patches_dir (Path): the patches directory, it must contain two subdirectories: `gcc` and `llvm`.
+        log_file (TextIO): File to log the patching
     """
-    patches = [patch.absolute() for patch in patches]
-    git_patches = [str(patch) for patch in patches if not str(patch).endswith(".sh")]
-    sh_patches = [f"sh {patch}" for patch in patches if str(patch).endswith(".sh")]
-    git_cmd = f"git -C {git_dir} apply".split(" ") + git_patches
+    match project:
+        case CompilerProject.LLVM:
+            subdir = "llvm"
+        case CompilerProject.GCC:
+            subdir = "gcc"
 
-    returncode = 0
-    for patch_cmd in [patch_cmd.split(" ") for patch_cmd in sh_patches]:
-        logging.debug(patch_cmd)
-        returncode += subprocess.run(
-            patch_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        ).returncode
+    if (patches_dir / subdir).exists():
+        patches = [p.resolve(True) for p in (patches_dir / subdir).glob("*.patch")]
+    else:
+        patches = []
 
-    if len(git_patches) > 0:
-        logging.debug(git_cmd)
-        returncode += subprocess.run(
-            git_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        ).returncode
-
-    return returncode == 0
-
-
-def patch_if_necessary(
-    commit_to_patch: Commit,
-    patchdb: PatchDB,
-    working_dir: Path,
-    additional_patches: list[Path] = [],
-) -> None:
-    """Looks up the known required patches for `commit_to_patch` in `patchdb`
-    and applies them, if necessary.
-    May raise a `BuildException` if the patches could not be applied.
-
-    Args:
-        commit_to_patch (Commit): The commit to look up the patches
-        patchdb (PatchDB): PatchDB
-        working_dir (Path): Path to git repository which has `commit_to_patch` checked out.
-        additional_patches (list[Path]): Additional patches to apply *after* the ones found in `patchdb`.
-
-    Returns:
-        None:
-    """
-    patches = patchdb.required_patches(commit_to_patch) + additional_patches
-    if patches:
-        if not apply_patches(working_dir, patches):
-            raise BuildException(f"Could not apply patches: {patches}")
+    for p in patches:
+        cmd = f"git -C {git_dir} apply {p}"
+        try:
+            print(f"Applying patch {p}", file=log_file, flush=True)
+            run_cmd_to_logfile(cmd, log_file=log_file)
+        except subprocess.CalledProcessError as e:
+            print(f"{p}: {e}", file=log_file, flush=True)
 
 
 def llvm_build_and_install(
@@ -280,9 +255,8 @@ def build_and_install_compiler(
     cache_prefix: Path,
     llvm_repo: Repo,
     gcc_repo: Repo,
-    patchdb: PatchDB,
+    patches_dir: Path,
     jobs: Optional[int] = None,
-    additional_patches: Optional[list[Path]] = None,
     configure_flags: str | None = None,
     logdir: Optional[Path] = None,
 ) -> Path:
@@ -296,9 +270,8 @@ def build_and_install_compiler(
         cache_prefix (Path): cache_prefix
         llvm_repo (Repo): LLVM repository
         gcc_repo (Repo): GCC repository
-        patchdb (PatchDB): The PatchDB to use.
+        patches_dir (Path): Path to the patches directory
         jobs (Optional[int]): Amount of jobs
-        additional_patches (Optional[list[Path]]): Additional patches to apply.
         configure_flags (str | None): additional flags to pass to the configure script or cmake.
         logdir (Optional[Path]): Path to where the build logs are saved.
 
@@ -324,12 +297,7 @@ def build_and_install_compiler(
                 f"git -C {str(repo.path)} worktree" f" add {tmpdir} {commit} -f",
                 log_file=build_log,
             )
-            patch_if_necessary(
-                commit,
-                patchdb,
-                Path(tmpdir),
-                additional_patches if additional_patches else [],
-            )
+            apply_patches(Path(tmpdir), project, patches_dir, build_log)
             res = _run_build_and_install(
                 project,
                 install_prefix,
@@ -358,7 +326,7 @@ class Builder:
         gcc_repo: Repo,
         llvm_repo: Repo,
         cstore: CompilerStore,
-        patchdb: Optional[PatchDB] = None,
+        patches_dir: Path | None = None,
         jobs: Optional[int] = None,
         logdir: Optional[Path] = None,
     ):
@@ -366,9 +334,8 @@ class Builder:
         self.gcc_repo = gcc_repo
         self.llvm_repo = llvm_repo
         self.cstore = cstore
+        self.patches_dir = patches_dir if patches_dir is not None else DEFAULT_PATCH_DIR
 
-        pdb = patchdb if patchdb else PatchDB()
-        self.patchdb = pdb
         self.jobs = jobs if jobs else multiprocessing.cpu_count()
         self.logdir = logdir
 
@@ -376,7 +343,6 @@ class Builder:
         self,
         project: CompilerProject,
         rev: Revision | Commit,
-        additional_patches: Optional[list[Path]] = None,
         configure_flags: str | None = None,
         jobs: Optional[int] = None,
         force: bool = False,
@@ -388,7 +354,6 @@ class Builder:
             self:
             project (CompilerProject): Project to build.
             rev (str): Revision of the project to build.
-            additional_patches (Optional[list[Path]]): Additional patches to apply.
             jobs (Optional[int]): Amount of jobs to use for the building.
             configure_flags (str | None): additional flags to pass to the configure script or cmake.
             force (bool): Build the specified compiler even if it has been cached before.
@@ -402,8 +367,8 @@ class Builder:
             return built_compiler_info
         if self.cstore.has_previously_failed_to_build(project, commit) and not force:
             raise BuildException(
-                f"Compiler {project} {commit} has previously failed to build.\n"
-                "Run with force==True (--force) to try again."
+                f"Compiler {project.name} {commit} has previously failed to build.\n"
+                "Run with force=True (--force) to try again."
             )
 
         if not jobs and not self.jobs:
@@ -418,9 +383,8 @@ class Builder:
                 cache_prefix=self.cache_prefix,
                 llvm_repo=self.llvm_repo,
                 gcc_repo=self.gcc_repo,
-                patchdb=self.patchdb,
+                patches_dir=self.patches_dir,
                 jobs=jobs,
-                additional_patches=additional_patches,
                 configure_flags=configure_flags,
                 logdir=self.logdir,
             )

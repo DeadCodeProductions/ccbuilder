@@ -23,8 +23,6 @@ from ccbuilder.builder.builder import (
     Builder,
     BuildException,
 )
-from ccbuilder.patcher.patchdatabase import PatchDB
-from ccbuilder.patcher.patcher import Patcher
 from ccbuilder.utils.utils import (
     get_compiler_info,
     get_compiler_project,
@@ -48,8 +46,6 @@ __all__ = [
     "RepositoryException",
     "Revision",
     "Commit",
-    "PatchDB",
-    "Patcher",
     "build_and_install_compiler",
     "BuilderWithoutCache",
     "Builder",
@@ -105,21 +101,14 @@ def ccbuilder_base_parser() -> ArgumentParser:
         "--patches-dir",
         type=str,
         default=str(DEFAULT_PATCH_DIR),
-        help=f"Path to the patches directory (default: {DEFAULT_PATCH_DIR})",
+        help="Path to the patches directory (the patches should be in two "
+        f"subdirectories, /gcc and /llvm) (default: {DEFAULT_PATCH_DIR})",
     )
     parser.add_argument(
         "--repos-dir",
         type=str,
         default=str(DEFAULT_REPOS_DIR),
         help=f"Path to the directory with the compiler repositories (default: {DEFAULT_REPOS_DIR})",
-    )
-
-    parser.add_argument(
-        "--patches",
-        nargs="+",
-        help="For the 'patcher', this defines which patch(es) to apply. For the 'builder', \
-            these are the additional patches to apply to the already existing patches from the PatchDB.",
-        type=str,
     )
 
     parser.add_argument(
@@ -134,6 +123,21 @@ def ccbuilder_base_parser() -> ArgumentParser:
         default=False,
         help="Prints the available releases for GCC and LLVM",
     )
+
+    parser.add_argument(
+        "--print-failed",
+        action="store_true",
+        default=False,
+        help="Prints the failed to build commits for GCC and LLVM",
+    )
+
+    parser.add_argument(
+        "--clear-failed",
+        action="store_true",
+        default=False,
+        help="Clears all failed to build history",
+    )
+
     return parser
 
 
@@ -148,30 +152,12 @@ def ccbuilder_build_parser() -> ArgumentParser:
         type=str,
         help="Additional flags to pass to configure/cmake",
     )
-    return parser
-
-
-def ccbuilder_patch_parser() -> ArgumentParser:
-    parser = ArgumentParser("patch", add_help=False)
     parser.add_argument(
-        "compiler", choices=["llvm", "gcc"], help="Which compiler to find patches for"
-    )
-    parser.add_argument(
-        "revision", type=str, help="Which revision to patch/Broken revision"
-    )
-
-    patch_command = parser.add_mutually_exclusive_group(required=True)
-    patch_command.add_argument(
-        "--find-range",
-        help="Try to find the range where a patch is required",
+        "--force",
         action="store_true",
+        default=False,
+        help="Force rebuild a compiler even if it failed previously building",
     )
-    patch_command.add_argument(
-        "--find-introducer",
-        help="Try to find the introducer commit of a build failure.",
-        action="store_true",
-    )
-
     return parser
 
 
@@ -202,7 +188,6 @@ def ccbuilder_parser() -> ArgumentParser:
     parser = ArgumentParser("ccbuilder", parents=[ccbuilder_base_parser()])
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("build", parents=[ccbuilder_build_parser()])
-    subparsers.add_parser("patch", parents=[ccbuilder_patch_parser()])
     subparsers.add_parser("cache", parents=[ccbuilder_cache_parser()])
 
     return parser
@@ -234,40 +219,36 @@ def handle_print_releases(args: Namespace) -> bool:
     return False
 
 
+def handle_print_failed(args: Namespace, cstore: CompilerStore) -> bool:
+    if not args.print_failed:
+        return False
+    for comp, commit in cstore.failed_to_build_compilers():
+        print(f"{comp}: {commit}")
+    return True
+
+
+def handle_clear_failed(args: Namespace, cstore: CompilerStore) -> bool:
+    if not args.clear_failed:
+        return False
+    cstore.clear_previously_failed_to_build()
+    return True
+
+
 def handle_build(args: Namespace, bldr: Builder) -> bool:
     # TODO: handle separate repo inputs?
-    patches = [Path(p.strip()).absolute() for p in args.patches] if args.patches else []
     if args.command == "build":
         project, _ = get_compiler_info(args.compiler, Path(args.repos_dir))
-        print(
-            bldr.build(
-                project,
-                args.revision.strip(),
-                additional_patches=patches,
-                configure_flags=args.additional_configure_flags,
-            ).prefix
-        )
-        return True
-    return False
-
-
-def handle_patch(args: Namespace, bldr: Builder, patchdb: PatchDB) -> bool:
-    if args.command == "patch":
-        patches = (
-            [Path(p.strip()).absolute() for p in args.patches] if args.patches else []
-        )
-        project, repo = get_compiler_info(args.compiler, Path(args.repos_dir))
-        patcher = Patcher(
-            Path(args.cache_prefix),
-            patchdb=patchdb,
-            cores=args.jobs,
-            builder=bldr,
-        )
-        if args.find_ranges:
-            patcher.find_ranges(project, repo, args.revision.strip(), patches)
-        elif args.find_introducer:
-            patcher.find_introducer(project, repo, args.revision.strip())
-
+        try:
+            print(
+                bldr.build(
+                    project,
+                    args.revision.strip(),
+                    configure_flags=args.additional_configure_flags,
+                    force=args.force is True,
+                ).prefix
+            )
+        except BuildException as e:
+            print(e)
         return True
     return False
 
@@ -328,13 +309,18 @@ def run_as_module() -> None:
             print(f"No such log level {args.log_level.upper()}")
             exit(1)
 
+    # TODO: call the next two functions automatically when importing ccbuilder?
     initialize_repos(args.repos_dir)
     initialize_patches_dir(args.patches_dir)
 
-    patchdb = PatchDB(Path(args.patches_dir) / "patchdb.json")
     cache_prefix = Path(args.cache_prefix.strip())
 
     if handle_print_releases(args):
+        return
+    store = load_compiler_store(default_store_file(cache_prefix))
+    if handle_print_failed(args, store):
+        return
+    if handle_clear_failed(args, store):
         return
     if handle_pull(args):
         return
@@ -343,7 +329,6 @@ def run_as_module() -> None:
     repo_dir_prefix = Path(args.repos_dir)
     llvm_repo = get_llvm_repo(repo_dir_prefix / "llvm-project")
     gcc_repo = get_gcc_repo(repo_dir_prefix / "gcc")
-    store = load_compiler_store(default_store_file(cache_prefix))
 
     if args.logdir:
         logdir = Path(args.logdir).absolute()
@@ -356,14 +341,12 @@ def run_as_module() -> None:
         gcc_repo=gcc_repo,
         llvm_repo=llvm_repo,
         cstore=store,
-        patchdb=patchdb,
+        patches_dir=Path(args.patches_dir),
         logdir=logdir,
         jobs=args.jobs,
     )
 
     if handle_build(args, bldr):
-        return
-    if handle_patch(args, bldr, patchdb):
         return
     if handle_cache(args, cache_prefix):
         return
