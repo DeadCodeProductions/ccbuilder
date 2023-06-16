@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
-from shutil import copy
+from shutil import copytree
 from enum import Enum
 from pathlib import Path
 from typing import TextIO, Literal, Union
@@ -107,5 +107,5 @@ def initialize_patches_dir(patches_dir: str) -> None:
         _ROOT = Path(__file__).parent.parent.absolute()
         patches_path.mkdir(parents=True, exist_ok=True)
         patches_source_dir = _ROOT / "data" / "patches"
-        for entry in patches_source_dir.iterdir():
-            copy(entry, patches_path / entry.name)
+        copytree(patches_source_dir / "llvm", patches_path / "llvm", dirs_exist_ok=True)
+        copytree(patches_source_dir / "gcc", patches_path / "gcc", dirs_exist_ok=True)
