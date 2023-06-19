@@ -38,6 +38,7 @@ from ccbuilder.compilerstore import (
 from ccbuilder.defaults import (
     DEFAULT_PREFIX_PARENT_PATH,
     DEFAULT_PATCH_DIR,
+    DEFAULT_REPOS_DIR,
 )
 
 __all__ = [
@@ -92,21 +93,21 @@ def ccbuilder_base_parser() -> ArgumentParser:
     # Misleading in the way, that it could be mistaken for the installation prefix?
     parser.add_argument(
         "--cache-prefix",
-        type=str,
+        type=Path,
         default=str(DEFAULT_PREFIX_PARENT_PATH),
         help=f"Installation prefix (default: {DEFAULT_PREFIX_PARENT_PATH})",
     )
     default_patch_dir = str()
     parser.add_argument(
         "--patches-dir",
-        type=str,
+        type=Path,
         default=str(DEFAULT_PATCH_DIR),
         help="Path to the patches directory (the patches should be in two "
         f"subdirectories, /gcc and /llvm) (default: {DEFAULT_PATCH_DIR})",
     )
     parser.add_argument(
         "--repos-dir",
-        type=str,
+        type=Path,
         default=str(DEFAULT_REPOS_DIR),
         help=f"Path to the directory with the compiler repositories (default: {DEFAULT_REPOS_DIR})",
     )
@@ -309,11 +310,10 @@ def run_as_module() -> None:
             print(f"No such log level {args.log_level.upper()}")
             exit(1)
 
-    # TODO: call the next two functions automatically when importing ccbuilder?
     initialize_repos(args.repos_dir)
     initialize_patches_dir(args.patches_dir)
 
-    cache_prefix = Path(args.cache_prefix.strip())
+    cache_prefix = Path(args.cache_prefix)
 
     if handle_print_releases(args):
         return
