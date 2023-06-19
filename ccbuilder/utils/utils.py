@@ -88,8 +88,7 @@ def get_compiler_info(
             raise Exception(f"Unknown compiler project {project_name}!")
 
 
-def initialize_repos(repos_dir: str) -> None:
-    repos_path = Path(repos_dir)
+def initialize_repos(repos_path: Path) -> None:
     repos_path.mkdir(parents=True, exist_ok=True)
     llvm = repos_path / "llvm-project"
     if not llvm.exists():
@@ -101,11 +100,16 @@ def initialize_repos(repos_dir: str) -> None:
         run_cmd(f"git clone git://gcc.gnu.org/git/gcc.git {gcc}")
 
 
-def initialize_patches_dir(patches_dir: str) -> None:
-    patches_path = Path(patches_dir)
+def initialize_patches_dir(patches_path: Path) -> None:
     if not patches_path.exists():
         _ROOT = Path(__file__).parent.parent.absolute()
         patches_path.mkdir(parents=True, exist_ok=True)
         patches_source_dir = _ROOT / "data" / "patches"
-        copytree(patches_source_dir / "llvm", patches_path / "llvm", dirs_exist_ok=True)
-        copytree(patches_source_dir / "gcc", patches_path / "gcc", dirs_exist_ok=True)
+        if not (patches_path / "llvm").exists():
+            copytree(
+                patches_source_dir / "llvm", patches_path / "llvm", dirs_exist_ok=True
+            )
+        if not (patches_path / "gcc").exists():
+            copytree(
+                patches_source_dir / "gcc", patches_path / "gcc", dirs_exist_ok=True
+            )
