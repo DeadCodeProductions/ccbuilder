@@ -1,0 +1,25 @@
+From d04ea9f6221427651eb489a921f9fbff571533a1 Mon Sep 17 00:00:00 2001
+From: Theodoros Theodoridis <theodort@inf.ethz.ch>
+Date: Tue, 20 Jun 2023 11:47:00 +0200
+Subject: [PATCH] check_size_and_offset
+
+---
+ .../sanitizer_common/sanitizer_platform_limits_posix.cpp        | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp b/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp
+index 60a10d9f467..ec0af3bc572 100644
+--- a/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp
++++ b/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp
+@@ -1132,7 +1132,7 @@ CHECK_SIZE_AND_OFFSET(ipc_perm, cgid);
+ #if !SANITIZER_LINUX || __GLIBC_PREREQ (2, 31)
+ /* glibc 2.30 and earlier provided 16-bit mode field instead of 32-bit
+    on many architectures.  */
+-CHECK_SIZE_AND_OFFSET(ipc_perm, mode);
++//CHECK_SIZE_AND_OFFSET(ipc_perm, mode);
+ #endif
+ 
+ CHECK_TYPE_SIZE(shmid_ds);
+-- 
+2.41.0
+

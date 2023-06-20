@@ -1,0 +1,25 @@
+From e377c1a4dffaca3ef393a468b1fd313fdd3e1c85 Mon Sep 17 00:00:00 2001
+From: Theodoros Theodoridis <theodort@inf.ethz.ch>
+Date: Tue, 20 Jun 2023 11:36:19 +0200
+Subject: [PATCH] malloc attribute
+
+---
+ gcc/c-family/c-attribs.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/gcc/c-family/c-attribs.c b/gcc/c-family/c-attribs.c
+index c779d13f023..8dfc9e63233 100644
+--- a/gcc/c-family/c-attribs.c
++++ b/gcc/c-family/c-attribs.c
+@@ -342,7 +342,7 @@ const struct attribute_spec c_common_attribute_table[] =
+   { "no_profile_instrument_function",  0, 0, true, false, false, false,
+ 			      handle_no_profile_instrument_function_attribute,
+ 			      NULL },
+-  { "malloc",                 0, 0, true,  false, false, false,
++  { "malloc",                 0, 2, true,  false, false, false,
+ 			      handle_malloc_attribute, attr_alloc_exclusions },
+   { "returns_twice",          0, 0, true,  false, false, false,
+ 			      handle_returns_twice_attribute,
+-- 
+2.41.0
+
