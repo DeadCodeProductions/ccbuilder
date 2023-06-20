@@ -1,0 +1,25 @@
+From 50090416502a884fbb4e6bf7f5a82d54cbec1ba4 Mon Sep 17 00:00:00 2001
+From: Theodoros Theodoridis <theodort@inf.ethz.ch>
+Date: Wed, 19 Jul 2023 13:00:47 +0200
+Subject: [PATCH] uintptr_t patch
+
+---
+ llvm/include/llvm/Support/Signals.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/llvm/include/llvm/Support/Signals.h b/llvm/include/llvm/Support/Signals.h
+index 44f5a750ff5c..4a7d0f6d7ecc 100644
+--- a/llvm/include/llvm/Support/Signals.h
++++ b/llvm/include/llvm/Support/Signals.h
+@@ -15,6 +15,8 @@
+ #define LLVM_SUPPORT_SIGNALS_H
+ 
+ #include <string>
++#include <cstdint>
++using uintptr_t = std::uintptr_t;
+ 
+ namespace llvm {
+ class StringRef;
+-- 
+2.41.0
+

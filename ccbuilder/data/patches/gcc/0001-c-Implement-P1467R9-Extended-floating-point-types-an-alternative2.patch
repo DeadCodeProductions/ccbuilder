@@ -1,0 +1,3076 @@
+From 1ea2f933ceae227cc8144c29d1d4b8a738d9dad0 Mon Sep 17 00:00:00 2001
+From: Jakub Jelinek <jakub@redhat.com>
+Date: Tue, 27 Sep 2022 08:04:06 +0200
+Subject: [PATCH] c++: Implement P1467R9 - Extended floating-point types and
+ standard names compiler part except for bfloat16 [PR106652]
+
+The following patch implements the compiler part of C++23
+P1467R9 - Extended floating-point types and standard names compiler part
+by introducing _Float{16,32,64,128} as keywords and builtin types
+like they are implemented for C already since GCC 7, with DF{16,32,64,128}_
+mangling.
+It also introduces _Float{32,64,128}x for C++ with the
+https://github.com/itanium-cxx-abi/cxx-abi/pull/147
+proposed mangling of DF{32,64,128}x.
+The patch doesn't add anything for bfloat16_t support, as right now
+__bf16 type refuses all conversions and arithmetic operations.
+The patch wants to keep backwards compatibility with how __float128 has
+been handled in C++ before, both for mangling and behavior in binary
+operations, overload resolution etc.  So, there are some backend changes
+where for C __float128 and _Float128 are the same type (float128_type_node
+and float128t_type_node are the same pointer), but for C++ they are distinct
+types which mangle differently and _Float128 is treated as extended
+floating-point type while __float128 is treated as non-standard floating
+point type.  The various C++23 changes about how floating-point types
+are changed are actually implemented as written in the spec only if at least
+one of the types involved is _Float{16,32,64,128,32x,64x,128x} (_FloatNx are
+also treated as extended floating-point types) and kept previous behavior
+otherwise.  For float/double/long double the rules are actually written that
+they behave the same as before.
+There is some backwards incompatibility at least on x86 regarding _Float16,
+because that type was already used by that name and with the DF16_ mangling
+(but only since GCC 12 and I think it isn't that widely used in the wild
+yet).  E.g. config/i386/avx512fp16intrin.h shows the issues, where
+in C or in GCC 12 in C++ one could pass 0.0f to a builtin taking _Float16
+argument, but with the changes that is not possible anymore, one needs
+to either use 0.0f16 or (_Float16) 0.0f.
+We have also a problem with glibc headers, where since glibc 2.27
+math.h and complex.h aren't compilable with these changes.  One gets
+errors like:
+In file included from /usr/include/math.h:43,
+                 from abc.c:1:
+/usr/include/bits/floatn.h:86:9: error: multiple types in one declaration
+   86 | typedef __float128 _Float128;
+      |         ^~~~~~~~~~
+/usr/include/bits/floatn.h:86:20: error: declaration does not declare anything [-fpermissive]
+   86 | typedef __float128 _Float128;
+      |                    ^~~~~~~~~
+In file included from /usr/include/bits/floatn.h:119:
+/usr/include/bits/floatn-common.h:214:9: error: multiple types in one declaration
+  214 | typedef float _Float32;
+      |         ^~~~~
+/usr/include/bits/floatn-common.h:214:15: error: declaration does not declare anything [-fpermissive]
+  214 | typedef float _Float32;
+      |               ^~~~~~~~
+/usr/include/bits/floatn-common.h:251:9: error: multiple types in one declaration
+  251 | typedef double _Float64;
+      |         ^~~~~~
+/usr/include/bits/floatn-common.h:251:16: error: declaration does not declare anything [-fpermissive]
+  251 | typedef double _Float64;
+      |                ^~~~~~~~
+This is from snippets like:
+ /* The remaining of this file provides support for older compilers.  */
+ # if __HAVE_FLOAT128
+
+ /* The type _Float128 exists only since GCC 7.0.  */
+ #  if !__GNUC_PREREQ (7, 0) || defined __cplusplus
+ typedef __float128 _Float128;
+ #  endif
+where it hardcodes that C++ doesn't have _Float{16,32,64,128,32x,64x,128x} support nor
+{f,F}{16,32,64,128}{,x} literal suffixes nor _Complex _Float{16,32,64,128,32x,64x,128x}.
+The patch fixincludes this for now and hopefully if this is committed, then
+glibc can change those.  The patch changes those
+ #  if !__GNUC_PREREQ (7, 0) || defined __cplusplus
+conditions to
+ #  if !__GNUC_PREREQ (7, 0) || (defined __cplusplus && !__GNUC_PREREQ (13, 0))
+Another thing is mangling, as said above, Itanium C++ ABI specifies
+DF <number> _ as _Float{16,32,64,128} mangling, but GCC was implementing
+a mangling incompatible with that starting with DF for fixed point types.
+Fixed point was never supported in C++ though, I believe the reason why
+the mangling has been added was that due to a bug it would leak into the
+C++ FE through decltype (0.0r) etc.  But that has been shortly after the
+mangling was added fixed (I think in the same GCC release cycle), so we
+now reject 0.0r etc. in C++.  If we ever need the fixed point mangling,
+I think it can be readded but better with a different prefix so that it
+doesn't conflict with the published standard manglings.  So, this patch
+also kills the fixed point mangling and implements the DF <number> _
+demangling.
+The patch predefines __STDCPP_FLOAT{16,32,64,128}_T__ macros when
+those types are available, but only for C++23, while the underlying types
+are available in C++98 and later including the {f,F}{16,32,64,128} literal
+suffixes (but those with a pedwarn for C++20 and earlier).  My understanding
+is that it needs to be predefined by the compiler, on the other side
+predefining even for older modes when <stdfloat> is a new C++23 header
+would be weird.  One can find out if _Float{16,32,64,128,32x,64x,128x} is
+supported in C++ by
+__GNUC__ >= 13 && defined(__FLT{16,32,64,128,32X,64X,128X}_MANT_DIG__)
+(but that doesn't work well with older G++ 13 snapshots).
+
+As for std::bfloat16_t, three targets (aarch64, arm and x86) apparently
+"support" __bf16 type which has the bfloat16 format, but isn't really
+usable, e.g. {aarch64,arm,ix86}_invalid_conversion disallow any conversions
+from or to type with BFmode, {aarch64,arm,ix86}_invalid_unary_op disallows
+any unary operations on those except for ADDR_EXPR and
+{aarch64,arm,ix86}_invalid_binary_op disallows any binary operation on
+those.  So, I think we satisfy:
+"If the implementation supports an extended floating-point type with the
+properties, as specified by ISO/IEC/IEEE 60559, of radix (b) of 2, storage
+width in bits (k) of 16, precision in bits (p) of 8, maximum exponent (emax)
+of 127, and exponent field width in bits (w) of 8, then the typedef-name
+std::bfloat16_t is defined in the header <stdfloat> and names such a type,
+the macro __STDCPP_BFLOAT16_T__ is defined, and the floating-point literal
+suffixes bf16 and BF16 are supported."
+because we don't really support those right now.
+
+2022-09-27  Jakub Jelinek  <jakub@redhat.com>
+
+	PR c++/106652
+	PR c++/85518
+gcc/
+	* tree-core.h (enum tree_index): Add TI_FLOAT128T_TYPE
+	enumerator.
+	* tree.h (float128t_type_node): Define.
+	* tree.cc (build_common_tree_nodes): Initialize float128t_type_node.
+	* builtins.def (DEF_FLOATN_BUILTIN): Adjust comment now that
+	_Float<N> is supported in C++ too.
+	* config/i386/i386.cc (ix86_mangle_type): Only mangle as "g"
+	float128t_type_node.
+	* config/i386/i386-builtins.cc (ix86_init_builtin_types): Use
+	float128t_type_node for __float128 instead of float128_type_node
+	and create it if NULL.
+	* config/i386/avx512fp16intrin.h (_mm_setzero_ph, _mm256_setzero_ph,
+	_mm512_setzero_ph, _mm_set_sh, _mm_load_sh): Use 0.0f16 instead of
+	0.0f.
+	* config/ia64/ia64.cc (ia64_init_builtins): Use
+	float128t_type_node for __float128 instead of float128_type_node
+	and create it if NULL.
+	* config/rs6000/rs6000-c.cc (is_float128_p): Also return true
+	for float128t_type_node if non-NULL.
+	* config/rs6000/rs6000.cc (rs6000_mangle_type): Don't mangle
+	float128_type_node as "u9__ieee128".
+	* config/rs6000/rs6000-builtin.cc (rs6000_init_builtins): Use
+	float128t_type_node for __float128 instead of float128_type_node
+	and create it if NULL.
+gcc/c-family/
+	* c-common.cc (c_common_reswords): Change _Float{16,32,64,128} and
+	_Float{32,64,128}x flags from D_CONLY to 0.
+	(shorten_binary_op): Punt if common_type returns error_mark_node.
+	(shorten_compare): Likewise.
+	(c_common_nodes_and_builtins): For C++ record _Float{16,32,64,128}
+	and _Float{32,64,128}x builtin types if available.  For C++
+	clear float128t_type_node.
+	* c-cppbuiltin.cc (c_cpp_builtins): Predefine
+	__STDCPP_FLOAT{16,32,64,128}_T__ for C++23 if supported.
+	* c-lex.cc (interpret_float): For q/Q suffixes prefer
+	float128t_type_node over float128_type_node.  Allow
+	{f,F}{16,32,64,128} suffixes for C++ if supported with pedwarn
+	for C++20 and older.  Allow {f,F}{32,64,128}x suffixes for C++
+	with pedwarn.  Don't call excess_precision_type for C++.
+gcc/cp/
+	* cp-tree.h (cp_compare_floating_point_conversion_ranks): Implement
+	P1467R9 - Extended floating-point types and standard names except
+	for std::bfloat16_t for now.  Declare.
+	(extended_float_type_p): New inline function.
+	* mangle.cc (write_builtin_type): Mangle float{16,32,64,128}_type_node
+	as DF{16,32,64,128}_.  Mangle float{32,64,128}x_type_node as
+	DF{32,64,128}x.  Remove FIXED_POINT_TYPE mangling that conflicts
+	with that.
+	* typeck2.cc (check_narrowing): If one of ftype or type is extended
+	floating-point type, compare floating-point conversion ranks.
+	* parser.cc (cp_keyword_starts_decl_specifier_p): Handle
+	CASE_RID_FLOATN_NX.
+	(cp_parser_simple_type_specifier): Likewise and diagnose missing
+	_Float<N> or _Float<N>x support if not supported by target.
+	* typeck.cc (cp_compare_floating_point_conversion_ranks): New function.
+	(cp_common_type): If both types are REAL_TYPE and one or both are
+	extended floating-point types, select common type based on comparison
+	of floating-point conversion ranks and subranks.
+	(cp_build_binary_op): Diagnose operation with floating point arguments
+	with unordered conversion ranks.
+	* call.cc (standard_conversion): For floating-point conversion, if
+	either from or to are extended floating-point types, set conv->bad_p
+	for implicit conversion from larger to smaller conversion rank or
+	with unordered conversion ranks.
+	(convert_like_internal): Emit a pedwarn on such conversions.
+	(build_conditional_expr): Diagnose operation with floating point
+	arguments with unordered conversion ranks.
+	(convert_arg_to_ellipsis): Don't promote extended floating-point types
+	narrower than double to double.
+	(compare_ics): Implement P1467R9 [over.ics.rank]/4 changes.
+gcc/testsuite/
+	* g++.dg/cpp23/ext-floating1.C: New test.
+	* g++.dg/cpp23/ext-floating2.C: New test.
+	* g++.dg/cpp23/ext-floating3.C: New test.
+	* g++.dg/cpp23/ext-floating4.C: New test.
+	* g++.dg/cpp23/ext-floating5.C: New test.
+	* g++.dg/cpp23/ext-floating6.C: New test.
+	* g++.dg/cpp23/ext-floating7.C: New test.
+	* g++.dg/cpp23/ext-floating8.C: New test.
+	* g++.dg/cpp23/ext-floating9.C: New test.
+	* g++.dg/cpp23/ext-floating10.C: New test.
+	* g++.dg/cpp23/ext-floating.h: New file.
+	* g++.target/i386/float16-1.C: Adjust expected diagnostics.
+libcpp/
+	* expr.cc (interpret_float_suffix): Allow {f,F}{16,32,64,128} and
+	{f,F}{32,64,128}x suffixes for C++.
+include/
+	* demangle.h (enum demangle_component_type): Add
+	DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE.
+	(struct demangle_component): Add u.s_extended_builtin member.
+libiberty/
+	* cp-demangle.c (d_dump): Handle
+	DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE.  Don't handle
+	DEMANGLE_COMPONENT_FIXED_TYPE.
+	(d_make_extended_builtin_type): New function.
+	(cplus_demangle_builtin_types): Add _Float entry.
+	(cplus_demangle_type): For DF demangle it as _Float<N> or
+	_Float<N>x rather than fixed point which conflicts with it.
+	(d_count_templates_scopes): Handle
+	DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE.  Just break; for
+	DEMANGLE_COMPONENT_FIXED_TYPE.
+	(d_find_pack): Handle DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE.
+	Don't handle DEMANGLE_COMPONENT_FIXED_TYPE.
+	(d_print_comp_inner): Likewise.
+	* cp-demangle.h (D_BUILTIN_TYPE_COUNT): Bump.
+	* testsuite/demangle-expected: Replace _Z3xxxDFyuVb test
+	with _Z3xxxDF16_DF32_DF64_DF128_CDF16_Vb.  Add
+	_Z3xxxDF32xDF64xDF128xCDF32xVb test.
+fixincludes/
+	* inclhack.def (glibc_cxx_floatn_1, glibc_cxx_floatn_2,
+	glibc_cxx_floatn_3): New fixes.
+	* tests/base/bits/floatn.h: New file.
+	* fixincl.x: Regenerated.
+---
+ fixincludes/fixincl.x                       | 154 ++++++-
+ fixincludes/inclhack.def                    |  96 +++++
+ fixincludes/tests/base/bits/floatn.h        |  74 ++++
+ gcc/builtins.def                            |   5 +-
+ gcc/c-family/c-common.cc                    |  37 +-
+ gcc/c-family/c-cppbuiltin.cc                |   8 +
+ gcc/c-family/c-lex.cc                       |  20 +-
+ gcc/config/i386/avx512fp16intrin.h          |  11 +-
+ gcc/config/i386/i386-builtins.cc            |  15 +-
+ gcc/config/i386/i386.cc                     |   5 +-
+ gcc/config/ia64/ia64.cc                     |  24 +-
+ gcc/config/rs6000/rs6000-builtin.cc         |  17 +-
+ gcc/config/rs6000/rs6000-c.cc               |   1 +
+ gcc/config/rs6000/rs6000.cc                 |   6 +-
+ gcc/cp/call.cc                              | 130 +++++-
+ gcc/cp/cp-tree.h                            |  13 +
+ gcc/cp/mangle.cc                            |  67 +--
+ gcc/cp/parser.cc                            |   9 +
+ gcc/cp/typeck.cc                            | 172 +++++++-
+ gcc/cp/typeck2.cc                           |  25 +-
+ gcc/testsuite/g++.dg/cpp23/ext-floating.h   |  30 ++
+ gcc/testsuite/g++.dg/cpp23/ext-floating1.C  | 447 ++++++++++++++++++++
+ gcc/testsuite/g++.dg/cpp23/ext-floating10.C |  13 +
+ gcc/testsuite/g++.dg/cpp23/ext-floating2.C  | 157 +++++++
+ gcc/testsuite/g++.dg/cpp23/ext-floating3.C  | 134 ++++++
+ gcc/testsuite/g++.dg/cpp23/ext-floating4.C  | 126 ++++++
+ gcc/testsuite/g++.dg/cpp23/ext-floating5.C  |  13 +
+ gcc/testsuite/g++.dg/cpp23/ext-floating6.C  |  30 ++
+ gcc/testsuite/g++.dg/cpp23/ext-floating7.C  | 119 ++++++
+ gcc/testsuite/g++.dg/cpp23/ext-floating8.C  |  13 +
+ gcc/testsuite/g++.dg/cpp23/ext-floating9.C  |  13 +
+ gcc/testsuite/g++.target/i386/float16-1.C   |   4 +-
+ gcc/tree-core.h                             |   4 +
+ gcc/tree.cc                                 |   1 +
+ gcc/tree.h                                  |   4 +
+ include/demangle.h                          |  20 +-
+ libcpp/expr.cc                              |   1 -
+ libiberty/cp-demangle.c                     | 103 +++--
+ libiberty/cp-demangle.h                     |   2 +-
+ libiberty/testsuite/demangle-expected       |   8 +-
+ 40 files changed, 1982 insertions(+), 149 deletions(-)
+ create mode 100644 fixincludes/tests/base/bits/floatn.h
+ create mode 100644 gcc/testsuite/g++.dg/cpp23/ext-floating.h
+ create mode 100644 gcc/testsuite/g++.dg/cpp23/ext-floating1.C
+ create mode 100644 gcc/testsuite/g++.dg/cpp23/ext-floating10.C
+ create mode 100644 gcc/testsuite/g++.dg/cpp23/ext-floating2.C
+ create mode 100644 gcc/testsuite/g++.dg/cpp23/ext-floating3.C
+ create mode 100644 gcc/testsuite/g++.dg/cpp23/ext-floating4.C
+ create mode 100644 gcc/testsuite/g++.dg/cpp23/ext-floating5.C
+ create mode 100644 gcc/testsuite/g++.dg/cpp23/ext-floating6.C
+ create mode 100644 gcc/testsuite/g++.dg/cpp23/ext-floating7.C
+ create mode 100644 gcc/testsuite/g++.dg/cpp23/ext-floating8.C
+ create mode 100644 gcc/testsuite/g++.dg/cpp23/ext-floating9.C
+
+diff --git a/fixincludes/fixincl.x b/fixincludes/fixincl.x
+index bad490453b7..56c37b7fd08 100644
+--- a/fixincludes/fixincl.x
++++ b/fixincludes/fixincl.x
+@@ -2,11 +2,11 @@
+  *
+  * DO NOT EDIT THIS FILE   (fixincl.x)
+  *
+- * It has been AutoGen-ed  February 27, 2022 at 07:47:03 PM by AutoGen 5.18.16
++ * It has been AutoGen-ed  September 27, 2022 at 12:49:21 AM by AutoGen 5.18.16
+  * From the definitions    inclhack.def
+  * and the template file   fixincl
+  */
+-/* DO NOT SVN-MERGE THIS FILE, EITHER Sun Feb 27 19:47:03 UTC 2022
++/* DO NOT SVN-MERGE THIS FILE, EITHER Tue Sep 27 00:49:21 CEST 2022
+  *
+  * You must regenerate it.  Use the ./genfixes script.
+  *
+@@ -15,7 +15,7 @@
+  * certain ANSI-incompatible system header files which are fixed to work
+  * correctly with ANSI C and placed in a directory that GNU C will search.
+  *
+- * This file contains 267 fixup descriptions.
++ * This file contains 270 fixup descriptions.
+  *
+  * See README for more information.
+  *
+@@ -4105,6 +4105,132 @@ static const char* apzGlibc_C99_Inline_4Patch[] = {
+     "%0 __attribute__ ((__gnu_inline__))",
+     (char*)NULL };
+ 
++/* * * * * * * * * * * * * * * * * * * * * * * * * *
++ *
++ *  Description of Glibc_Cxx_Floatn_1 fix
++ */
++tSCC zGlibc_Cxx_Floatn_1Name[] =
++     "glibc_cxx_floatn_1";
++
++/*
++ *  File name selection pattern
++ */
++tSCC zGlibc_Cxx_Floatn_1List[] =
++  "bits/floatn.h\0bits/floatn-common.h\0";
++/*
++ *  Machine/OS name selection pattern
++ */
++#define apzGlibc_Cxx_Floatn_1Machs (const char**)NULL
++
++/*
++ *  content selection pattern - do fix if pattern found
++ */
++tSCC zGlibc_Cxx_Floatn_1Select0[] =
++       "^([ \t]*#[ \t]*if !__GNUC_PREREQ \\(7, 0\\) \\|\\| )defined __cplusplus\n\
++(([ \t]*/\\*[^\n\
++]*\\*/\n\
++)?([ \t]*#[ \t]*if[^\n\
++]*\n\
++)?[ \t]*#[ \t]*define __f(16|32|64|128)x?\\()";
++
++#define    GLIBC_CXX_FLOATN_1_TEST_CT  1
++static tTestDesc aGlibc_Cxx_Floatn_1Tests[] = {
++  { TT_EGREP,    zGlibc_Cxx_Floatn_1Select0, (regex_t*)NULL }, };
++
++/*
++ *  Fix Command Arguments for Glibc_Cxx_Floatn_1
++ */
++static const char* apzGlibc_Cxx_Floatn_1Patch[] = {
++    "format",
++    "%1(defined __cplusplus && !__GNUC_PREREQ (13, 0))\n\
++%2",
++    (char*)NULL };
++
++/* * * * * * * * * * * * * * * * * * * * * * * * * *
++ *
++ *  Description of Glibc_Cxx_Floatn_2 fix
++ */
++tSCC zGlibc_Cxx_Floatn_2Name[] =
++     "glibc_cxx_floatn_2";
++
++/*
++ *  File name selection pattern
++ */
++tSCC zGlibc_Cxx_Floatn_2List[] =
++  "bits/floatn.h\0bits/floatn-common.h\0";
++/*
++ *  Machine/OS name selection pattern
++ */
++#define apzGlibc_Cxx_Floatn_2Machs (const char**)NULL
++
++/*
++ *  content selection pattern - do fix if pattern found
++ */
++tSCC zGlibc_Cxx_Floatn_2Select0[] =
++       "^([ \t]*#[ \t]*if !__GNUC_PREREQ \\(7, 0\\) \\|\\| )defined __cplusplus\n\
++(([ \t]*/\\*[^\n\
++]*\\*/\n\
++)?[ \t]*typedef[ \t]+[^\n\
++]*[ \t]+_Float(16|32|64|128)x?([ \t]+__attribute__ \\(\\(__mode__ \\(__HF__\\)\\)\\))?;)";
++
++#define    GLIBC_CXX_FLOATN_2_TEST_CT  1
++static tTestDesc aGlibc_Cxx_Floatn_2Tests[] = {
++  { TT_EGREP,    zGlibc_Cxx_Floatn_2Select0, (regex_t*)NULL }, };
++
++/*
++ *  Fix Command Arguments for Glibc_Cxx_Floatn_2
++ */
++static const char* apzGlibc_Cxx_Floatn_2Patch[] = {
++    "format",
++    "%1(defined __cplusplus && !__GNUC_PREREQ (13, 0))\n\
++%2",
++    (char*)NULL };
++
++/* * * * * * * * * * * * * * * * * * * * * * * * * *
++ *
++ *  Description of Glibc_Cxx_Floatn_3 fix
++ */
++tSCC zGlibc_Cxx_Floatn_3Name[] =
++     "glibc_cxx_floatn_3";
++
++/*
++ *  File name selection pattern
++ */
++tSCC zGlibc_Cxx_Floatn_3List[] =
++  "bits/floatn.h\0bits/floatn-common.h\0";
++/*
++ *  Machine/OS name selection pattern
++ */
++#define apzGlibc_Cxx_Floatn_3Machs (const char**)NULL
++
++/*
++ *  content selection pattern - do fix if pattern found
++ */
++tSCC zGlibc_Cxx_Floatn_3Select0[] =
++       "^([ \t]*#[ \t]*if !__GNUC_PREREQ \\(7, 0\\) \\|\\| )defined __cplusplus\n\
++(([ \t]*/\\*[^\n\
++]*\n\
++?[^\n\
++]*\\*/\n\
++)?([ \t]*#[ \t]*if[^\n\
++]*\n\
++)?([ \t]*typedef[ \t]+[^\n\
++]*;\n\
++)?[ \t]*#[ \t]*define __CFLOAT(16|32|64|128)X?[ \t]+)";
++
++#define    GLIBC_CXX_FLOATN_3_TEST_CT  1
++static tTestDesc aGlibc_Cxx_Floatn_3Tests[] = {
++  { TT_EGREP,    zGlibc_Cxx_Floatn_3Select0, (regex_t*)NULL }, };
++
++/*
++ *  Fix Command Arguments for Glibc_Cxx_Floatn_3
++ */
++static const char* apzGlibc_Cxx_Floatn_3Patch[] = {
++    "format",
++    "%1(defined __cplusplus && !__GNUC_PREREQ (13, 0))\n\
++%2",
++    (char*)NULL };
++
+ /* * * * * * * * * * * * * * * * * * * * * * * * * *
+  *
+  *  Description of Glibc_Mutex_Init fix
+@@ -10872,9 +10998,9 @@ static const char* apzX11_SprintfPatch[] = {
+  *
+  *  List of all fixes
+  */
+-#define REGEX_COUNT          305
++#define REGEX_COUNT          308
+ #define MACH_LIST_SIZE_LIMIT 187
+-#define FIX_COUNT            267
++#define FIX_COUNT            270
+ 
+ /*
+  *  Enumerate the fixes
+@@ -10977,6 +11103,9 @@ typedef enum {
+     GLIBC_C99_INLINE_2_FIXIDX,
+     GLIBC_C99_INLINE_3_FIXIDX,
+     GLIBC_C99_INLINE_4_FIXIDX,
++    GLIBC_CXX_FLOATN_1_FIXIDX,
++    GLIBC_CXX_FLOATN_2_FIXIDX,
++    GLIBC_CXX_FLOATN_3_FIXIDX,
+     GLIBC_MUTEX_INIT_FIXIDX,
+     GLIBC_STDINT_FIXIDX,
+     GLIBC_STRNCPY_FIXIDX,
+@@ -11635,6 +11764,21 @@ tFixDesc fixDescList[ FIX_COUNT ] = {
+      GLIBC_C99_INLINE_4_TEST_CT, FD_MACH_ONLY | FD_SUBROUTINE,
+      aGlibc_C99_Inline_4Tests,   apzGlibc_C99_Inline_4Patch, 0 },
+ 
++  {  zGlibc_Cxx_Floatn_1Name,    zGlibc_Cxx_Floatn_1List,
++     apzGlibc_Cxx_Floatn_1Machs,
++     GLIBC_CXX_FLOATN_1_TEST_CT, FD_MACH_ONLY | FD_SUBROUTINE,
++     aGlibc_Cxx_Floatn_1Tests,   apzGlibc_Cxx_Floatn_1Patch, 0 },
++
++  {  zGlibc_Cxx_Floatn_2Name,    zGlibc_Cxx_Floatn_2List,
++     apzGlibc_Cxx_Floatn_2Machs,
++     GLIBC_CXX_FLOATN_2_TEST_CT, FD_MACH_ONLY | FD_SUBROUTINE,
++     aGlibc_Cxx_Floatn_2Tests,   apzGlibc_Cxx_Floatn_2Patch, 0 },
++
++  {  zGlibc_Cxx_Floatn_3Name,    zGlibc_Cxx_Floatn_3List,
++     apzGlibc_Cxx_Floatn_3Machs,
++     GLIBC_CXX_FLOATN_3_TEST_CT, FD_MACH_ONLY | FD_SUBROUTINE,
++     aGlibc_Cxx_Floatn_3Tests,   apzGlibc_Cxx_Floatn_3Patch, 0 },
++
+   {  zGlibc_Mutex_InitName,    zGlibc_Mutex_InitList,
+      apzGlibc_Mutex_InitMachs,
+      GLIBC_MUTEX_INIT_TEST_CT, FD_MACH_ONLY,
+diff --git a/fixincludes/inclhack.def b/fixincludes/inclhack.def
+index 7605ac89aa2..a3f171ab4b6 100644
+--- a/fixincludes/inclhack.def
++++ b/fixincludes/inclhack.def
+@@ -2015,6 +2015,102 @@ fix = {
+ 	EOT;
+ };
+ 
++/*  glibc-2.27 to 2.36 assume GCC 7 or later supports some or all
++ *  of _Float{16,32,64,128} and _Float{32,64,128}x keywords for C,
++ *  but doesn't for C++.
++ */
++fix = {
++    hackname  = glibc_cxx_floatn_1;
++    files     = bits/floatn.h, bits/floatn-common.h;
++    select    = "^([ \t]*#[ \t]*if !__GNUC_PREREQ \\(7, 0\\) \\|\\| )defined __cplusplus\n"
++		"(([ \t]*/\\*[^\n]*\\*/\n)?"
++		"([ \t]*#[ \t]*if[^\n]*\n)?"
++		"[ \t]*#[ \t]*define __f(16|32|64|128)x?\\()";
++    c_fix     = format;
++    c_fix_arg = "%1(defined __cplusplus && !__GNUC_PREREQ (13, 0))\n%2";
++    test_text = <<-EOT
++	#  if !__GNUC_PREREQ (7, 0) || defined __cplusplus
++	/* The literal suffix f128 exists only since GCC 7.0.  */
++	#   define __f128(x) x##l
++	#  else
++	#   define __f128(x) x##f128
++	#  endif
++	#  if !__GNUC_PREREQ (7, 0) || defined __cplusplus
++	/* The literal suffix (f128) exist for powerpc only since GCC 7.0.  */
++	#   if __LDBL_MANT_DIG__ == 113
++	#    define __f128(x) x##l
++	#   else
++	#    define __f128(x) x##q
++	#   endif
++	#  else
++	#   define __f128(x) x##f128
++	#  endif
++	#  if !__GNUC_PREREQ (7, 0) || defined __cplusplus
++	#   ifdef __NO_LONG_DOUBLE_MATH
++	#    define __f64(x) x##l
++	#   else
++	#    define __f64(x) x
++	#   endif
++	#  else
++	#   define __f64(x) x##f64
++	#  endif
++	EOT;
++};
++
++fix = {
++    hackname  = glibc_cxx_floatn_2;
++    files     = bits/floatn.h, bits/floatn-common.h;
++    select    = "^([ \t]*#[ \t]*if !__GNUC_PREREQ \\(7, 0\\) \\|\\| )defined __cplusplus\n"
++		"(([ \t]*/\\*[^\n]*\\*/\n)?"
++		"[ \t]*typedef[ \t]+[^\n]*[ \t]+_Float(16|32|64|128)x?([ \t]+__attribute__ \\(\\(__mode__ \\(__HF__\\)\\)\\))?;)";
++    c_fix     = format;
++    c_fix_arg = "%1(defined __cplusplus && !__GNUC_PREREQ (13, 0))\n%2";
++    test_text = <<-EOT
++	#  if !__GNUC_PREREQ (7, 0) || defined __cplusplus
++	typedef float _Float16 __attribute__ ((__mode__ (__HF__)));
++	#  endif
++	#  if !__GNUC_PREREQ (7, 0) || defined __cplusplus
++	typedef __float128 _Float128;
++	#  endif
++	EOT;
++};
++
++fix = {
++    hackname  = glibc_cxx_floatn_3;
++    files     = bits/floatn.h, bits/floatn-common.h;
++    select    = "^([ \t]*#[ \t]*if !__GNUC_PREREQ \\(7, 0\\) \\|\\| )defined __cplusplus\n"
++		"(([ \t]*/\\*[^\n]*\n?[^\n]*\\*/\n)?"
++		"([ \t]*#[ \t]*if[^\n]*\n)?"
++		"([ \t]*typedef[ \t]+[^\n]*;\n)?"
++		"[ \t]*#[ \t]*define __CFLOAT(16|32|64|128)X?[ \t]+)";
++    c_fix     = format;
++    c_fix_arg = "%1(defined __cplusplus && !__GNUC_PREREQ (13, 0))\n%2";
++    test_text = <<-EOT
++	#  if !__GNUC_PREREQ (7, 0) || defined __cplusplus
++	#   define __CFLOAT128 _Complex long double
++	#  else
++	#   define __CFLOAT128 _Complex _Float128
++	#  endif
++	#  if !__GNUC_PREREQ (7, 0) || defined __cplusplus
++	/* Add a typedef for older GCC compilers which don't natively support
++	   _Complex _Float128.  */
++	typedef _Complex float __cfloat128 __attribute__ ((__mode__ (__TC__)));
++	#   define __CFLOAT128 __cfloat128
++	#  else
++	#   define __CFLOAT128 _Complex _Float128
++	#  endif
++	#  if !__GNUC_PREREQ (7, 0) || defined __cplusplus
++	#   ifdef __NO_LONG_DOUBLE_MATH
++	#    define __CFLOAT64 _Complex long double
++	#   else
++	#    define __CFLOAT64 _Complex double
++	#   endif
++	#  else
++	#   define __CFLOAT64 _Complex _Float64
++	#  endif
++	EOT;
++};
++
+ /*  glibc-2.3.5 defines pthread mutex initializers incorrectly,
+  *  so we replace them with versions that correspond to the
+  *  definition.
+diff --git a/fixincludes/tests/base/bits/floatn.h b/fixincludes/tests/base/bits/floatn.h
+new file mode 100644
+index 00000000000..f09528b6e27
+--- /dev/null
++++ b/fixincludes/tests/base/bits/floatn.h
+@@ -0,0 +1,74 @@
++/*  DO NOT EDIT THIS FILE.
++
++    It has been auto-edited by fixincludes from:
++
++	"fixinc/tests/inc/bits/floatn.h"
++
++    This had to be done to correct non-standard usages in the
++    original, manufacturer supplied header file.  */
++
++
++
++#if defined( GLIBC_CXX_FLOATN_1_CHECK )
++#  if !__GNUC_PREREQ (7, 0) || (defined __cplusplus && !__GNUC_PREREQ (13, 0))
++/* The literal suffix f128 exists only since GCC 7.0.  */
++#   define __f128(x) x##l
++#  else
++#   define __f128(x) x##f128
++#  endif
++#  if !__GNUC_PREREQ (7, 0) || (defined __cplusplus && !__GNUC_PREREQ (13, 0))
++/* The literal suffix (f128) exist for powerpc only since GCC 7.0.  */
++#   if __LDBL_MANT_DIG__ == 113
++#    define __f128(x) x##l
++#   else
++#    define __f128(x) x##q
++#   endif
++#  else
++#   define __f128(x) x##f128
++#  endif
++#  if !__GNUC_PREREQ (7, 0) || (defined __cplusplus && !__GNUC_PREREQ (13, 0))
++#   ifdef __NO_LONG_DOUBLE_MATH
++#    define __f64(x) x##l
++#   else
++#    define __f64(x) x
++#   endif
++#  else
++#   define __f64(x) x##f64
++#  endif
++#endif  /* GLIBC_CXX_FLOATN_1_CHECK */
++
++
++#if defined( GLIBC_CXX_FLOATN_2_CHECK )
++#  if !__GNUC_PREREQ (7, 0) || (defined __cplusplus && !__GNUC_PREREQ (13, 0))
++typedef float _Float16 __attribute__ ((__mode__ (__HF__)));
++#  endif
++#  if !__GNUC_PREREQ (7, 0) || (defined __cplusplus && !__GNUC_PREREQ (13, 0))
++typedef __float128 _Float128;
++#  endif
++#endif  /* GLIBC_CXX_FLOATN_2_CHECK */
++
++
++#if defined( GLIBC_CXX_FLOATN_3_CHECK )
++#  if !__GNUC_PREREQ (7, 0) || (defined __cplusplus && !__GNUC_PREREQ (13, 0))
++#   define __CFLOAT128 _Complex long double
++#  else
++#   define __CFLOAT128 _Complex _Float128
++#  endif
++#  if !__GNUC_PREREQ (7, 0) || (defined __cplusplus && !__GNUC_PREREQ (13, 0))
++/* Add a typedef for older GCC compilers which don't natively support
++   _Complex _Float128.  */
++typedef _Complex float __cfloat128 __attribute__ ((__mode__ (__TC__)));
++#   define __CFLOAT128 __cfloat128
++#  else
++#   define __CFLOAT128 _Complex _Float128
++#  endif
++#  if !__GNUC_PREREQ (7, 0) || (defined __cplusplus && !__GNUC_PREREQ (13, 0))
++#   ifdef __NO_LONG_DOUBLE_MATH
++#    define __CFLOAT64 _Complex long double
++#   else
++#    define __CFLOAT64 _Complex double
++#   endif
++#  else
++#   define __CFLOAT64 _Complex _Float64
++#  endif
++#endif  /* GLIBC_CXX_FLOATN_3_CHECK */
+diff --git a/gcc/builtins.def b/gcc/builtins.def
+index 005976f34e9..f2005d61938 100644
+--- a/gcc/builtins.def
++++ b/gcc/builtins.def
+@@ -114,9 +114,8 @@ along with GCC; see the file COPYING3.  If not see
+    with an argument such as FLOAT32 to produce the enum value for the type.  If
+    we are compiling for the C language with GNU extensions, we enable the name
+    without the __builtin_ prefix as well as the name with the __builtin_
+-   prefix.  C++ does not enable these names by default because they don't have
+-   the _Float<N> and _Float<N>X keywords, and a class based library should use
+-   the __builtin_ names.  */
++   prefix.  C++ does not enable these names by default because a class based
++   library should use the __builtin_ names.  */
+ #undef DEF_FLOATN_BUILTIN
+ #define DEF_FLOATN_BUILTIN(ENUM, NAME, TYPE, ATTRS)	\
+   DEF_BUILTIN (ENUM, "__builtin_" NAME, BUILT_IN_NORMAL, TYPE, TYPE,	\
+diff --git a/gcc/c-family/c-common.cc b/gcc/c-family/c-common.cc
+index c9c9e720bc8..e05555fc427 100644
+--- a/gcc/c-family/c-common.cc
++++ b/gcc/c-family/c-common.cc
+@@ -348,13 +348,13 @@ const struct c_common_resword c_common_reswords[] =
+   { "_Bool",		RID_BOOL,      D_CONLY },
+   { "_Complex",		RID_COMPLEX,	0 },
+   { "_Imaginary",	RID_IMAGINARY, D_CONLY },
+-  { "_Float16",         RID_FLOAT16,   D_CONLY },
+-  { "_Float32",         RID_FLOAT32,   D_CONLY },
+-  { "_Float64",         RID_FLOAT64,   D_CONLY },
+-  { "_Float128",        RID_FLOAT128,  D_CONLY },
+-  { "_Float32x",        RID_FLOAT32X,  D_CONLY },
+-  { "_Float64x",        RID_FLOAT64X,  D_CONLY },
+-  { "_Float128x",       RID_FLOAT128X, D_CONLY },
++  { "_Float16",         RID_FLOAT16,    0 },
++  { "_Float32",         RID_FLOAT32,    0 },
++  { "_Float64",         RID_FLOAT64,    0 },
++  { "_Float128",        RID_FLOAT128,   0 },
++  { "_Float32x",        RID_FLOAT32X,   0 },
++  { "_Float64x",        RID_FLOAT64X,   0 },
++  { "_Float128x",       RID_FLOAT128X,  0 },
+   { "_Decimal32",       RID_DFLOAT32,  D_CONLY },
+   { "_Decimal64",       RID_DFLOAT64,  D_CONLY },
+   { "_Decimal128",      RID_DFLOAT128, D_CONLY },
+@@ -1421,8 +1421,11 @@ shorten_binary_op (tree result_type, tree op0, tree op1, bool bitwise)
+ 	  == TYPE_PRECISION (TREE_TYPE (arg0)))
+       && unsigned0 == unsigned1
+       && (unsigned0 || !uns))
+-    return c_common_signed_or_unsigned_type
+-      (unsigned0, common_type (TREE_TYPE (arg0), TREE_TYPE (arg1)));
++    {
++      tree ctype = common_type (TREE_TYPE (arg0), TREE_TYPE (arg1));
++      if (ctype != error_mark_node)
++	return c_common_signed_or_unsigned_type (unsigned0, ctype);
++    }
+ 
+   else if (TREE_CODE (arg0) == INTEGER_CST
+ 	   && (unsigned1 || !uns)
+@@ -3194,9 +3197,10 @@ shorten_compare (location_t loc, tree *op0_ptr, tree *op1_ptr,
+ 
+   else if (unsignedp0 == unsignedp1 && real1 == real2
+ 	   && TYPE_PRECISION (TREE_TYPE (primop0)) < TYPE_PRECISION (*restype_ptr)
+-	   && TYPE_PRECISION (TREE_TYPE (primop1)) < TYPE_PRECISION (*restype_ptr))
++	   && TYPE_PRECISION (TREE_TYPE (primop1)) < TYPE_PRECISION (*restype_ptr)
++	   && (type = common_type (TREE_TYPE (primop0), TREE_TYPE (primop1)))
++	      != error_mark_node)
+     {
+-      type = common_type (TREE_TYPE (primop0), TREE_TYPE (primop1));
+       type = c_common_signed_or_unsigned_type (unsignedp0
+ 					       || TYPE_UNSIGNED (*restype_ptr),
+ 					       type);
+@@ -4370,11 +4374,18 @@ c_common_nodes_and_builtins (void)
+   record_builtin_type (RID_DOUBLE, NULL, double_type_node);
+   record_builtin_type (RID_MAX, "long double", long_double_type_node);
+ 
+-  if (!c_dialect_cxx ())
+-    for (i = 0; i < NUM_FLOATN_NX_TYPES; i++)
++  for (i = 0; i < NUM_FLOATN_NX_TYPES; i++)
++    {
+       if (FLOATN_NX_TYPE_NODE (i) != NULL_TREE)
+ 	record_builtin_type ((enum rid) (RID_FLOATN_NX_FIRST + i), NULL,
+ 			     FLOATN_NX_TYPE_NODE (i));
++    }
++
++  /* For C, let float128t_type_node (__float128 in some backends) be the
++     same type as float128_type_node (_Float128), for C++ let those
++     be distinct types that mangle and behave differently.  */
++  if (c_dialect_cxx ())
++    float128t_type_node = NULL_TREE;
+ 
+   /* Only supported decimal floating point extension if the target
+      actually supports underlying modes. */
+diff --git a/gcc/c-family/c-cppbuiltin.cc b/gcc/c-family/c-cppbuiltin.cc
+index 4672ae8486a..6d140848d0f 100644
+--- a/gcc/c-family/c-cppbuiltin.cc
++++ b/gcc/c-family/c-cppbuiltin.cc
+@@ -1245,6 +1245,14 @@ c_cpp_builtins (cpp_reader *pfile)
+     {
+       if (FLOATN_NX_TYPE_NODE (i) == NULL_TREE)
+ 	continue;
++      if (c_dialect_cxx ()
++	  && cxx_dialect > cxx20
++	  && !floatn_nx_types[i].extended)
++	{
++	  char name[sizeof ("__STDCPP_FLOAT128_T__=1")];
++	  sprintf (name, "__STDCPP_FLOAT%d_T__=1", floatn_nx_types[i].n);
++	  cpp_define (pfile, name);
++	}
+       char prefix[20], csuffix[20];
+       sprintf (prefix, "FLT%d%s", floatn_nx_types[i].n,
+ 	       floatn_nx_types[i].extended ? "X" : "");
+diff --git a/gcc/c-family/c-lex.cc b/gcc/c-family/c-lex.cc
+index 8bfa4f4024f..605dc63da9f 100644
+--- a/gcc/c-family/c-lex.cc
++++ b/gcc/c-family/c-lex.cc
+@@ -954,6 +954,10 @@ interpret_float (const cpp_token *token, unsigned int flags,
+ 	  pedwarn (input_location, OPT_Wpedantic, "non-standard suffix on floating constant");
+ 
+ 	type = c_common_type_for_mode (mode, 0);
++	/* For Q suffix, prefer float128t_type_node (__float128) type
++	   over float128_type_node (_Float128) type if they are distinct.  */
++	if (type == float128_type_node && float128t_type_node)
++	  type = float128t_type_node;
+ 	gcc_assert (type);
+       }
+     else if ((flags & (CPP_N_FLOATN | CPP_N_FLOATNX)) != 0)
+@@ -973,8 +977,17 @@ interpret_float (const cpp_token *token, unsigned int flags,
+ 	    error ("unsupported non-standard suffix on floating constant");
+ 	    return error_mark_node;
+ 	  }
++	else if (c_dialect_cxx () && !extended)
++	  {
++	    if (cxx_dialect < cxx23)
++	      pedwarn (input_location, OPT_Wpedantic,
++		       "%<f%d%> or %<F%d%> suffix on floating constant only "
++		       "available with %<-std=c++2b%> or %<-std=gnu++2b%>",
++		       n, n);
++	  }
+ 	else
+-	  pedwarn (input_location, OPT_Wpedantic, "non-standard suffix on floating constant");
++	  pedwarn (input_location, OPT_Wpedantic,
++		   "non-standard suffix on floating constant");
+       }
+     else if ((flags & CPP_N_WIDTH) == CPP_N_LARGE)
+       type = long_double_type_node;
+@@ -984,7 +997,10 @@ interpret_float (const cpp_token *token, unsigned int flags,
+     else
+       type = double_type_node;
+ 
+-  const_type = excess_precision_type (type);
++  if (c_dialect_cxx ())
++    const_type = NULL_TREE;
++  else
++    const_type = excess_precision_type (type);
+   if (!const_type)
+     const_type = type;
+ 
+diff --git a/gcc/config/i386/avx512fp16intrin.h b/gcc/config/i386/avx512fp16intrin.h
+index 28041516bac..75f7475ad18 100644
+--- a/gcc/config/i386/avx512fp16intrin.h
++++ b/gcc/config/i386/avx512fp16intrin.h
+@@ -183,21 +183,21 @@ extern __inline __m128h
+ __attribute__ ((__gnu_inline__, __always_inline__, __artificial__))
+ _mm_setzero_ph (void)
+ {
+-  return _mm_set1_ph (0.0f);
++  return _mm_set1_ph (0.0f16);
+ }
+ 
+ extern __inline __m256h
+ __attribute__ ((__gnu_inline__, __always_inline__, __artificial__))
+ _mm256_setzero_ph (void)
+ {
+-  return _mm256_set1_ph (0.0f);
++  return _mm256_set1_ph (0.0f16);
+ }
+ 
+ extern __inline __m512h
+ __attribute__ ((__gnu_inline__, __always_inline__, __artificial__))
+ _mm512_setzero_ph (void)
+ {
+-  return _mm512_set1_ph (0.0f);
++  return _mm512_set1_ph (0.0f16);
+ }
+ 
+ extern __inline __m128h
+@@ -358,7 +358,8 @@ extern __inline __m128h
+ __attribute__ ((__gnu_inline__, __always_inline__, __artificial__))
+ _mm_set_sh (_Float16 __F)
+ {
+-  return _mm_set_ph (0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, __F);
++  return _mm_set_ph (0.0f16, 0.0f16, 0.0f16, 0.0f16, 0.0f16, 0.0f16, 0.0f16,
++		     __F);
+ }
+ 
+ /* Create a vector with element 0 as *P and the rest zero.  */
+@@ -366,7 +367,7 @@ extern __inline __m128h
+ __attribute__ ((__gnu_inline__, __always_inline__, __artificial__))
+ _mm_load_sh (void const *__P)
+ {
+-  return _mm_set_ph (0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
++  return _mm_set_ph (0.0f16, 0.0f16, 0.0f16, 0.0f16, 0.0f16, 0.0f16, 0.0f16,
+ 		     *(_Float16 const *) __P);
+ }
+ 
+diff --git a/gcc/config/i386/i386-builtins.cc b/gcc/config/i386/i386-builtins.cc
+index 96743e6122d..44c2ff6b4cd 100644
+--- a/gcc/config/i386/i386-builtins.cc
++++ b/gcc/config/i386/i386-builtins.cc
+@@ -1388,9 +1388,18 @@ ix86_init_builtin_types (void)
+   lang_hooks.types.register_builtin_type (float80_type_node, "__float80");
+ 
+   /* The __float128 type.  The node has already been created as
+-     _Float128, so we only need to register the __float128 name for
+-     it.  */
+-  lang_hooks.types.register_builtin_type (float128_type_node, "__float128");
++     _Float128, so for C we only need to register the __float128 name for
++     it.  For C++, we create a distinct type which will mangle differently
++     (g) vs. _Float128 (DF128_) and behave backwards compatibly.  */
++  if (float128t_type_node == NULL_TREE)
++    {
++      float128t_type_node = make_node (REAL_TYPE);
++      TYPE_PRECISION (float128t_type_node)
++	= TYPE_PRECISION (float128_type_node);
++      SET_TYPE_MODE (float128t_type_node, TYPE_MODE (float128_type_node));
++      layout_type (float128t_type_node);
++    }
++  lang_hooks.types.register_builtin_type (float128t_type_node, "__float128");
+ 
+   ix86_register_float16_builtin_type ();
+ 
+diff --git a/gcc/config/i386/i386.cc b/gcc/config/i386/i386.cc
+index 30a9cd006e8..0a32af4dc63 100644
+--- a/gcc/config/i386/i386.cc
++++ b/gcc/config/i386/i386.cc
+@@ -22453,7 +22453,10 @@ ix86_mangle_type (const_tree type)
+       return "DF16_";
+     case E_TFmode:
+       /* __float128 is "g".  */
+-      return "g";
++      if (type == float128t_type_node)
++	return "g";
++      /* _Float128 should mangle as "DF128_" done in generic code.  */
++      return NULL;
+     case E_XFmode:
+       /* "long double" or __float80 is "e".  */
+       return "e";
+diff --git a/gcc/config/ia64/ia64.cc b/gcc/config/ia64/ia64.cc
+index f9fb681a36c..9b5a8dc58c3 100644
+--- a/gcc/config/ia64/ia64.cc
++++ b/gcc/config/ia64/ia64.cc
+@@ -10466,11 +10466,19 @@ ia64_init_builtins (void)
+ 	= build_pointer_type (build_qualified_type
+ 			      (char_type_node, TYPE_QUAL_CONST));
+ 
+-      (*lang_hooks.types.register_builtin_type) (float128_type_node,
++      if (float128t_type_node == NULL_TREE)
++	{
++	  float128t_type_node = make_node (REAL_TYPE);
++	  TYPE_PRECISION (float128t_type_node)
++	    = TYPE_PRECISION (float128_type_node);
++	  layout_type (float128t_type_node);
++	  SET_TYPE_MODE (float128t_type_node, TYPE_MODE (float128_type_node));
++	}
++      (*lang_hooks.types.register_builtin_type) (float128t_type_node,
+ 						 "__float128");
+ 
+       /* TFmode support builtins.  */
+-      ftype = build_function_type_list (float128_type_node, NULL_TREE);
++      ftype = build_function_type_list (float128t_type_node, NULL_TREE);
+       decl = add_builtin_function ("__builtin_infq", ftype,
+ 				   IA64_BUILTIN_INFQ, BUILT_IN_MD,
+ 				   NULL, NULL_TREE);
+@@ -10481,7 +10489,7 @@ ia64_init_builtins (void)
+ 				   NULL, NULL_TREE);
+       ia64_builtins[IA64_BUILTIN_HUGE_VALQ] = decl;
+ 
+-      ftype = build_function_type_list (float128_type_node,
++      ftype = build_function_type_list (float128t_type_node,
+ 					const_string_type,
+ 					NULL_TREE);
+       decl = add_builtin_function ("__builtin_nanq", ftype,
+@@ -10496,8 +10504,8 @@ ia64_init_builtins (void)
+       TREE_READONLY (decl) = 1;
+       ia64_builtins[IA64_BUILTIN_NANSQ] = decl;
+ 
+-      ftype = build_function_type_list (float128_type_node,
+-					float128_type_node,
++      ftype = build_function_type_list (float128t_type_node,
++					float128t_type_node,
+ 					NULL_TREE);
+       decl = add_builtin_function ("__builtin_fabsq", ftype,
+ 				   IA64_BUILTIN_FABSQ, BUILT_IN_MD,
+@@ -10505,9 +10513,9 @@ ia64_init_builtins (void)
+       TREE_READONLY (decl) = 1;
+       ia64_builtins[IA64_BUILTIN_FABSQ] = decl;
+ 
+-      ftype = build_function_type_list (float128_type_node,
+-					float128_type_node,
+-					float128_type_node,
++      ftype = build_function_type_list (float128t_type_node,
++					float128t_type_node,
++					float128t_type_node,
+ 					NULL_TREE);
+       decl = add_builtin_function ("__builtin_copysignq", ftype,
+ 				   IA64_BUILTIN_COPYSIGNQ, BUILT_IN_MD,
+diff --git a/gcc/config/rs6000/rs6000-builtin.cc b/gcc/config/rs6000/rs6000-builtin.cc
+index b60dde9dfbc..59307a9e72b 100644
+--- a/gcc/config/rs6000/rs6000-builtin.cc
++++ b/gcc/config/rs6000/rs6000-builtin.cc
+@@ -736,7 +736,22 @@ rs6000_init_builtins (void)
+       if (TARGET_IEEEQUAD && TARGET_LONG_DOUBLE_128)
+ 	ieee128_float_type_node = long_double_type_node;
+       else
+-	ieee128_float_type_node = float128_type_node;
++	{
++	  /* For C we only need to register the __ieee128 name for
++	     it.  For C++, we create a distinct type which will mangle
++	     differently (u9__ieee128) vs. _Float128 (DF128_) and behave
++	     backwards compatibly.  */
++	  if (float128t_type_node == NULL_TREE)
++	    {
++	      float128t_type_node = make_node (REAL_TYPE);
++	      TYPE_PRECISION (float128t_type_node)
++		= TYPE_PRECISION (float128_type_node);
++	      layout_type (float128t_type_node);
++	      SET_TYPE_MODE (float128t_type_node,
++			     TYPE_MODE (float128_type_node));
++	    }
++	  ieee128_float_type_node = float128t_type_node;
++	}
+       t = build_qualified_type (ieee128_float_type_node, TYPE_QUAL_CONST);
+       lang_hooks.types.register_builtin_type (ieee128_float_type_node,
+ 					      "__ieee128");
+diff --git a/gcc/config/rs6000/rs6000-c.cc b/gcc/config/rs6000/rs6000-c.cc
+index 9c8cbd7a66e..cb8170ea425 100644
+--- a/gcc/config/rs6000/rs6000-c.cc
++++ b/gcc/config/rs6000/rs6000-c.cc
+@@ -815,6 +815,7 @@ static inline bool
+ is_float128_p (tree t)
+ {
+   return (t == float128_type_node
++	  || (t && t == float128t_type_node)
+ 	  || (TARGET_IEEEQUAD
+ 	      && TARGET_LONG_DOUBLE_128
+ 	      && t == long_double_type_node));
+diff --git a/gcc/config/rs6000/rs6000.cc b/gcc/config/rs6000/rs6000.cc
+index d4defc855d0..13ac83adb0f 100644
+--- a/gcc/config/rs6000/rs6000.cc
++++ b/gcc/config/rs6000/rs6000.cc
+@@ -20182,7 +20182,11 @@ rs6000_mangle_type (const_tree type)
+ 
+   if (SCALAR_FLOAT_TYPE_P (type) && FLOAT128_IBM_P (TYPE_MODE (type)))
+     return "g";
+-  if (SCALAR_FLOAT_TYPE_P (type) && FLOAT128_IEEE_P (TYPE_MODE (type)))
++  if (SCALAR_FLOAT_TYPE_P (type)
++      && FLOAT128_IEEE_P (TYPE_MODE (type))
++      /* _Float128 should mangle as DF128_ (done in generic code)
++	 rather than u9__ieee128 (used for __ieee128 and __float128).  */
++      && type != float128_type_node)
+     return "u9__ieee128";
+ 
+   if (type == vector_pair_type_node)
+diff --git a/gcc/cp/call.cc b/gcc/cp/call.cc
+index 14c6037729f..cd8582de25c 100644
+--- a/gcc/cp/call.cc
++++ b/gcc/cp/call.cc
+@@ -1534,6 +1534,22 @@ standard_conversion (tree to, tree from, tree expr, bool c_cast_p,
+ 	   || (underlying_type && same_type_p (to, underlying_type)))
+ 	  && next_conversion (conv)->rank <= cr_promotion)
+ 	conv->rank = cr_promotion;
++
++      /* A prvalue of floating-point type can be converted to a prvalue of
++	 another floating-point type with a greater or equal conversion
++	 rank ([conv.rank]).  A prvalue of standard floating-point type can
++	 be converted to a prvalue of another standard floating-point type.
++	 For backwards compatibility with handling __float128 and other
++	 non-standard floating point types, allow all implicit floating
++	 point conversions if neither type is extended floating-point
++	 type and if at least one of them is, fail if they have unordered
++	 conversion rank or from has higher conversion rank.  */
++      if (fcode == REAL_TYPE
++	  && tcode == REAL_TYPE
++	  && (extended_float_type_p (from)
++	      || extended_float_type_p (to))
++	  && cp_compare_floating_point_conversion_ranks (from, to) >= 2)
++	conv->bad_p = true;
+     }
+   else if (fcode == VECTOR_TYPE && tcode == VECTOR_TYPE
+ 	   && vector_types_convertible_p (from, to, false))
+@@ -5819,6 +5835,21 @@ build_conditional_expr (const op_location_t &loc,
+       /* In this case, there is always a common type.  */
+       result_type = type_after_usual_arithmetic_conversions (arg2_type,
+ 							     arg3_type);
++      if (result_type == error_mark_node
++	  && TREE_CODE (arg2_type) == REAL_TYPE
++	  && TREE_CODE (arg3_type) == REAL_TYPE
++	  && (extended_float_type_p (arg2_type)
++	      || extended_float_type_p (arg3_type))
++	  && cp_compare_floating_point_conversion_ranks (arg2_type,
++							 arg3_type) == 3)
++	{
++	  if (complain & tf_error)
++	    error_at (loc, "operands to %<?:%> of types %qT and %qT "
++			   "have unordered conversion rank",
++		      arg2_type, arg3_type);
++	  return error_mark_node;
++	}
++
+       if (complain & tf_warning)
+ 	do_warn_double_promotion (result_type, arg2_type, arg3_type,
+ 				  "implicit conversion from %qH to %qI to "
+@@ -7873,6 +7904,27 @@ convert_like_internal (conversion *convs, tree expr, tree fn, int argnum,
+ 				"direct-initialization",
+ 				totype, TREE_TYPE (expr));
+ 
++      if (TREE_CODE (TREE_TYPE (expr)) == REAL_TYPE
++	  && TREE_CODE (totype) == REAL_TYPE
++	  && (extended_float_type_p (TREE_TYPE (expr))
++	      || extended_float_type_p (totype)))
++	switch (cp_compare_floating_point_conversion_ranks (TREE_TYPE (expr),
++							    totype))
++	  {
++	  case 2:
++	    pedwarn (loc, 0, "converting to %qH from %qI with greater "
++			     "conversion rank", totype, TREE_TYPE (expr));
++	    complained = true;
++	    break;
++	  case 3:
++	    pedwarn (loc, 0, "converting to %qH from %qI with unordered "
++			     "conversion ranks", totype, TREE_TYPE (expr));
++	    complained = true;
++	    break;
++	  default:
++	    break;
++	  }
++
+       for (; t ; t = next_conversion (t))
+ 	{
+ 	  if (t->kind == ck_user && t->cand->reason)
+@@ -8498,7 +8550,8 @@ convert_arg_to_ellipsis (tree arg, tsubst_flags_t complain)
+   if (TREE_CODE (arg_type) == REAL_TYPE
+       && (TYPE_PRECISION (arg_type)
+ 	  < TYPE_PRECISION (double_type_node))
+-      && !DECIMAL_FLOAT_MODE_P (TYPE_MODE (arg_type)))
++      && !DECIMAL_FLOAT_MODE_P (TYPE_MODE (arg_type))
++      && !extended_float_type_p (arg_type))
+     {
+       if ((complain & tf_warning)
+ 	  && warn_double_promotion && !c_inhibit_evaluation_warnings)
+@@ -11670,6 +11723,81 @@ compare_ics (conversion *ics1, conversion *ics2)
+ 	return 1;
+     }
+ 
++  {
++    /* A conversion in either direction between floating-point type FP1 and
++       floating-point type FP2 is better than a conversion in the same
++       direction between FP1 and arithmetic type T3 if
++       - the floating-point conversion rank of FP1 is equal to the rank of
++	 FP2, and
++       - T3 is not a floating-point type, or T3 is a floating-point type
++	 whose rank is not equal to the rank of FP1, or the floating-point
++	 conversion subrank of FP2 is greater than the subrank of T3.  */
++    tree fp1 = from_type1;
++    tree fp2 = to_type1;
++    tree fp3 = from_type2;
++    tree t3 = to_type2;
++    int ret = 1;
++    if (TYPE_MAIN_VARIANT (fp2) == TYPE_MAIN_VARIANT (t3))
++      {
++	std::swap (fp1, fp2);
++	std::swap (fp3, t3);
++      }
++    if (TYPE_MAIN_VARIANT (fp1) == TYPE_MAIN_VARIANT (fp3)
++	&& TREE_CODE (fp1) == REAL_TYPE
++	/* Only apply this rule if at least one of the 3 types is
++	   extended floating-point type, otherwise keep them as
++	   before for compatibility reasons with types like __float128.
++	   float, double and long double alone have different conversion
++	   ranks and so when just those 3 types are involved, this
++	   rule doesn't trigger.  */
++	&& (extended_float_type_p (fp1)
++	    || (TREE_CODE (fp2) == REAL_TYPE && extended_float_type_p (fp2))
++	    || (TREE_CODE (t3) == REAL_TYPE && extended_float_type_p (t3))))
++      {
++	if (TREE_CODE (fp2) != REAL_TYPE)
++	  {
++	    ret = -ret;
++	    std::swap (fp2, t3);
++	  }
++	if (TREE_CODE (fp2) == REAL_TYPE)
++	  {
++	    /* cp_compare_floating_point_conversion_ranks returns -1, 0 or 1
++	       if the conversion rank is equal (-1 or 1 if the subrank is
++	       different).  */
++	    if (IN_RANGE (cp_compare_floating_point_conversion_ranks (fp1,
++								      fp2),
++			  -1, 1))
++	      {
++		/* Conversion ranks of FP1 and FP2 are equal.  */
++		if (TREE_CODE (t3) != REAL_TYPE
++		    || !IN_RANGE (cp_compare_floating_point_conversion_ranks
++								(fp1, t3),
++				  -1, 1))
++		  /* FP1 <-> FP2 conversion is better.  */
++		  return ret;
++		int c = cp_compare_floating_point_conversion_ranks (fp2, t3);
++		gcc_assert (IN_RANGE (c, -1, 1));
++		if (c == 1)
++		  /* Conversion subrank of FP2 is greater than subrank of T3.
++		     FP1 <-> FP2 conversion is better.  */
++		  return ret;
++		else if (c == -1)
++		  /* Conversion subrank of FP2 is less than subrank of T3.
++		     FP1 <-> T3 conversion is better.  */
++		  return -ret;
++	      }
++	    else if (TREE_CODE (t3) == REAL_TYPE
++		     && IN_RANGE (cp_compare_floating_point_conversion_ranks
++								(fp1, t3),
++				  -1, 1))
++	      /* Conversion ranks of FP1 and FP2 are not equal, conversion
++		 ranks of FP1 and T3 are equal.
++		 FP1 <-> T3 conversion is better.  */
++	      return -ret;
++	  }
++      }
++  }
++
+   if (TYPE_PTR_P (from_type1)
+       && TYPE_PTR_P (from_type2)
+       && TYPE_PTR_P (to_type1)
+diff --git a/gcc/cp/cp-tree.h b/gcc/cp/cp-tree.h
+index b2df6fc0ad4..83048af82c3 100644
+--- a/gcc/cp/cp-tree.h
++++ b/gcc/cp/cp-tree.h
+@@ -7927,6 +7927,7 @@ extern tree require_complete_type_sfinae	(tree, tsubst_flags_t);
+ extern tree complete_type			(tree);
+ extern tree complete_type_or_else		(tree, tree);
+ extern tree complete_type_or_maybe_complain	(tree, tree, tsubst_flags_t);
++extern int cp_compare_floating_point_conversion_ranks (tree, tree);
+ inline bool type_unknown_p			(const_tree);
+ enum { ce_derived, ce_type, ce_normal, ce_exact };
+ extern bool comp_except_specs			(const_tree, const_tree, int);
+@@ -8666,6 +8667,18 @@ struct push_access_scope_guard
+   }
+ };
+ 
++/* True if TYPE is an extended floating-point type.  */
++
++inline bool
++extended_float_type_p (tree type)
++{
++  type = TYPE_MAIN_VARIANT (type);
++  for (int i = 0; i < NUM_FLOATN_NX_TYPES; ++i)
++    if (type == FLOATN_TYPE_NODE (i))
++      return true;
++  return false;
++}
++
+ #if CHECKING_P
+ namespace selftest {
+   extern void run_cp_tests (void);
+diff --git a/gcc/cp/mangle.cc b/gcc/cp/mangle.cc
+index 75388e99bfd..00d283fff8c 100644
+--- a/gcc/cp/mangle.cc
++++ b/gcc/cp/mangle.cc
+@@ -2648,63 +2648,24 @@ write_builtin_type (tree type)
+ 	write_string ("Dd");
+       else if (type == dfloat128_type_node || type == fallback_dfloat128_type)
+ 	write_string ("De");
++      else if (type == float16_type_node)
++	write_string ("DF16_");
++      else if (type == float32_type_node)
++	write_string ("DF32_");
++      else if (type == float64_type_node)
++	write_string ("DF64_");
++      else if (type == float128_type_node)
++	write_string ("DF128_");
++      else if (type == float32x_type_node)
++	write_string ("DF32x");
++      else if (type == float64x_type_node)
++	write_string ("DF64x");
++      else if (type == float128x_type_node)
++	write_string ("DF128x");
+       else
+ 	gcc_unreachable ();
+       break;
+ 
+-    case FIXED_POINT_TYPE:
+-      write_string ("DF");
+-      if (GET_MODE_IBIT (TYPE_MODE (type)) > 0)
+-	write_unsigned_number (GET_MODE_IBIT (TYPE_MODE (type)));
+-      if (type == fract_type_node
+-	  || type == sat_fract_type_node
+-	  || type == accum_type_node
+-	  || type == sat_accum_type_node)
+-	write_char ('i');
+-      else if (type == unsigned_fract_type_node
+-	       || type == sat_unsigned_fract_type_node
+-	       || type == unsigned_accum_type_node
+-	       || type == sat_unsigned_accum_type_node)
+-	write_char ('j');
+-      else if (type == short_fract_type_node
+-	       || type == sat_short_fract_type_node
+-	       || type == short_accum_type_node
+-	       || type == sat_short_accum_type_node)
+-	write_char ('s');
+-      else if (type == unsigned_short_fract_type_node
+-	       || type == sat_unsigned_short_fract_type_node
+-	       || type == unsigned_short_accum_type_node
+-	       || type == sat_unsigned_short_accum_type_node)
+-	write_char ('t');
+-      else if (type == long_fract_type_node
+-	       || type == sat_long_fract_type_node
+-	       || type == long_accum_type_node
+-	       || type == sat_long_accum_type_node)
+-	write_char ('l');
+-      else if (type == unsigned_long_fract_type_node
+-	       || type == sat_unsigned_long_fract_type_node
+-	       || type == unsigned_long_accum_type_node
+-	       || type == sat_unsigned_long_accum_type_node)
+-	write_char ('m');
+-      else if (type == long_long_fract_type_node
+-	       || type == sat_long_long_fract_type_node
+-	       || type == long_long_accum_type_node
+-	       || type == sat_long_long_accum_type_node)
+-	write_char ('x');
+-      else if (type == unsigned_long_long_fract_type_node
+-	       || type == sat_unsigned_long_long_fract_type_node
+-	       || type == unsigned_long_long_accum_type_node
+-	       || type == sat_unsigned_long_long_accum_type_node)
+-	write_char ('y');
+-      else
+-	sorry ("mangling unknown fixed point type");
+-      write_unsigned_number (GET_MODE_FBIT (TYPE_MODE (type)));
+-      if (TYPE_SATURATING (type))
+-	write_char ('s');
+-      else
+-	write_char ('n');
+-      break;
+-
+     default:
+       gcc_unreachable ();
+     }
+diff --git a/gcc/cp/parser.cc b/gcc/cp/parser.cc
+index 24585c1c013..ed2d7130ba3 100644
+--- a/gcc/cp/parser.cc
++++ b/gcc/cp/parser.cc
+@@ -1050,6 +1050,7 @@ cp_keyword_starts_decl_specifier_p (enum rid keyword)
+     case RID_UNSIGNED:
+     case RID_FLOAT:
+     case RID_DOUBLE:
++    CASE_RID_FLOATN_NX:
+     case RID_VOID:
+       /* CV qualifiers.  */
+     case RID_CONST:
+@@ -19610,6 +19611,14 @@ cp_parser_simple_type_specifier (cp_parser* parser,
+     case RID_DOUBLE:
+       type = double_type_node;
+       break;
++    CASE_RID_FLOATN_NX:
++      type = FLOATN_NX_TYPE_NODE (token->keyword - RID_FLOATN_NX_FIRST);
++      if (type == NULL_TREE)
++	error ("%<_Float%d%s%> is not supported on this target",
++	       floatn_nx_types[token->keyword - RID_FLOATN_NX_FIRST].n,
++	       floatn_nx_types[token->keyword - RID_FLOATN_NX_FIRST].extended
++	       ? "x" : "");
++      break;
+     case RID_VOID:
+       type = void_type_node;
+       break;
+diff --git a/gcc/cp/typeck.cc b/gcc/cp/typeck.cc
+index 6ecdd97697d..d025d00740c 100644
+--- a/gcc/cp/typeck.cc
++++ b/gcc/cp/typeck.cc
+@@ -272,6 +272,133 @@ merge_type_attributes_from (tree type, tree other_type)
+   return cp_build_type_attribute_variant (type, attrs);
+ }
+ 
++/* Compare floating point conversion ranks and subranks of T1 and T2
++   types.  If T1 and T2 have unordered conversion ranks, return 3.
++   If T1 has greater conversion rank than T2, return 2.
++   If T2 has greater conversion rank than T1, return -2.
++   If T1 has equal conversion rank as T2, return -1, 0 or 1 depending
++   on if T1 has smaller, equal or greater conversion subrank than
++   T2.  */
++
++int
++cp_compare_floating_point_conversion_ranks (tree t1, tree t2)
++{
++  tree mv1 = TYPE_MAIN_VARIANT (t1);
++  tree mv2 = TYPE_MAIN_VARIANT (t2);
++  int extended1 = 0;
++  int extended2 = 0;
++
++  if (mv1 == mv2)
++    return 0;
++
++  for (int i = 0; i < NUM_FLOATN_NX_TYPES; ++i)
++    {
++      if (mv1 == FLOATN_NX_TYPE_NODE (i))
++	extended1 = i + 1;
++      if (mv2 == FLOATN_NX_TYPE_NODE (i))
++	extended2 = i + 1;
++    }
++  if (extended2 && !extended1)
++    {
++      int ret = cp_compare_floating_point_conversion_ranks (t2, t1);
++      return ret == 3 ? 3 : -ret;
++    }
++
++  const struct real_format *fmt1 = REAL_MODE_FORMAT (TYPE_MODE (t1));
++  const struct real_format *fmt2 = REAL_MODE_FORMAT (TYPE_MODE (t2));
++  gcc_assert (fmt1->b == 2 && fmt2->b == 2);
++  /* For {ibm,mips}_extended_format formats, the type has variable
++     precision up to ~2150 bits when the first double is around maximum
++     representable double and second double is subnormal minimum.
++     So, e.g. for __ibm128 vs. std::float128_t, they have unordered
++     ranks.  */
++  int p1 = (MODE_COMPOSITE_P (TYPE_MODE (t1))
++	    ? fmt1->emax - fmt1->emin + fmt1->p - 1 : fmt1->p);
++  int p2 = (MODE_COMPOSITE_P (TYPE_MODE (t2))
++	    ? fmt2->emax - fmt2->emin + fmt2->p - 1 : fmt2->p);
++  /* The rank of a floating point type T is greater than the rank of
++     any floating-point type whose set of values is a proper subset
++     of the set of values of T.  */
++  if ((p1 > p2 && fmt1->emax >= fmt2->emax)
++       || (p1 == p2 && fmt1->emax > fmt2->emax))
++    return 2;
++  if ((p1 < p2 && fmt1->emax <= fmt2->emax)
++       || (p1 == p2 && fmt1->emax < fmt2->emax))
++    return -2;
++  if ((p1 > p2 && fmt1->emax < fmt2->emax)
++       || (p1 < p2 && fmt1->emax > fmt2->emax))
++    return 3;
++  if (!extended1 && !extended2)
++    {
++      /* The rank of long double is greater than the rank of double, which
++	 is greater than the rank of float.  */
++      if (t1 == long_double_type_node)
++	return 2;
++      else if (t2 == long_double_type_node)
++	return -2;
++      if (t1 == double_type_node)
++	return 2;
++      else if (t2 == double_type_node)
++	return -2;
++      if (t1 == float_type_node)
++	return 2;
++      else if (t2 == float_type_node)
++	return -2;
++      return 0;
++    }
++  /* Two extended floating-point types with the same set of values have equal
++     ranks.  */
++  if (extended1 && extended2)
++    {
++      if ((extended1 <= NUM_FLOATN_TYPES) == (extended2 <= NUM_FLOATN_TYPES))
++	{
++	  /* Prefer higher extendedN value.  */
++	  if (extended1 > extended2)
++	    return 1;
++	  else if (extended1 < extended2)
++	    return -1;
++	  else
++	    return 0;
++	}
++      else if (extended1 <= NUM_FLOATN_TYPES)
++	/* Prefer _FloatN type over _FloatMx type.  */
++	return 1;
++      else if (extended2 <= NUM_FLOATN_TYPES)
++	return -1;
++      else
++	return 0;
++    }
++
++  /* gcc_assert (extended1 && !extended2);  */
++  tree *p;
++  int cnt = 0;
++  for (p = &float_type_node; p <= &long_double_type_node; ++p)
++    {
++      const struct real_format *fmt3 = REAL_MODE_FORMAT (TYPE_MODE (*p));
++      gcc_assert (fmt3->b == 2);
++      int p3 = (MODE_COMPOSITE_P (TYPE_MODE (*p))
++		? fmt3->emax - fmt3->emin + fmt3->p - 1 : fmt3->p);
++      if (p1 == p3 && fmt1->emax == fmt3->emax)
++	++cnt;
++    }
++  /* An extended floating-point type with the same set of values
++     as exactly one cv-unqualified standard floating-point type
++     has a rank equal to the rank of that standard floating-point
++     type.
++
++     An extended floating-point type with the same set of values
++     as more than one cv-unqualified standard floating-point type
++     has a rank equal to the rank of double.
++
++     Thus, if the latter is true and t2 is long double, t2
++     has higher rank.  */
++  if (cnt > 1 && mv2 == long_double_type_node)
++    return -2;
++  /* Otherwise, they have equal rank, but extended types
++     (other than std::bfloat16_t) have higher subrank.  */
++  return 1;
++}
++
+ /* Return the common type for two arithmetic types T1 and T2 under the
+    usual arithmetic conversions.  The default conversions have already
+    been applied, and enumerated types converted to their compatible
+@@ -342,6 +469,23 @@ cp_common_type (tree t1, tree t2)
+   if (code2 == REAL_TYPE && code1 != REAL_TYPE)
+     return build_type_attribute_variant (t2, attributes);
+ 
++  if (code1 == REAL_TYPE
++      && (extended_float_type_p (t1) || extended_float_type_p (t2)))
++    {
++      tree mv1 = TYPE_MAIN_VARIANT (t1);
++      tree mv2 = TYPE_MAIN_VARIANT (t2);
++      if (mv1 == mv2)
++	return build_type_attribute_variant (t1, attributes);
++
++      int cmpret = cp_compare_floating_point_conversion_ranks (mv1, mv2);
++      if (cmpret == 3)
++	return error_mark_node;
++      else if (cmpret >= 0)
++	return build_type_attribute_variant (t1, attributes);
++      else
++	return build_type_attribute_variant (t2, attributes);
++    }
++
+   /* Both real or both integers; use the one with greater precision.  */
+   if (TYPE_PRECISION (t1) > TYPE_PRECISION (t2))
+     return build_type_attribute_variant (t1, attributes);
+@@ -5031,7 +5175,20 @@ cp_build_binary_op (const op_location_t &location,
+        = targetm.invalid_binary_op (code, type0, type1)))
+     {
+       if (complain & tf_error)
+-	error (invalid_op_diag);
++	{
++	  if (code0 == REAL_TYPE
++	      && code1 == REAL_TYPE
++	      && (extended_float_type_p (type0)
++		  || extended_float_type_p (type1))
++	      && cp_compare_floating_point_conversion_ranks (type0,
++							     type1) == 3)
++	    {
++	      rich_location richloc (line_table, location);
++	      binary_op_error (&richloc, code, type0, type1);
++	    }
++	  else
++	    error (invalid_op_diag);
++	}
+       return error_mark_node;
+     }
+ 
+@@ -5901,6 +6058,19 @@ cp_build_binary_op (const op_location_t &location,
+       && (shorten || common || short_compare))
+     {
+       result_type = cp_common_type (type0, type1);
++      if (result_type == error_mark_node
++	  && code0 == REAL_TYPE
++	  && code1 == REAL_TYPE
++	  && (extended_float_type_p (type0) || extended_float_type_p (type1))
++	  && cp_compare_floating_point_conversion_ranks (type0, type1) == 3)
++	{
++	  if (complain & tf_error)
++	    {
++	      rich_location richloc (line_table, location);
++	      binary_op_error (&richloc, code, type0, type1);
++	    }
++	  return error_mark_node;
++	}
+       if (complain & tf_warning)
+ 	{
+ 	  do_warn_double_promotion (result_type, type0, type1,
+diff --git a/gcc/cp/typeck2.cc b/gcc/cp/typeck2.cc
+index 1d92310edd0..79c351c75d1 100644
+--- a/gcc/cp/typeck2.cc
++++ b/gcc/cp/typeck2.cc
+@@ -1010,12 +1010,25 @@ check_narrowing (tree type, tree init, tsubst_flags_t complain,
+   else if (TREE_CODE (ftype) == REAL_TYPE
+ 	   && TREE_CODE (type) == REAL_TYPE)
+     {
+-      if ((same_type_p (ftype, long_double_type_node)
+-	   && (same_type_p (type, double_type_node)
+-	       || same_type_p (type, float_type_node)))
+-	  || (same_type_p (ftype, double_type_node)
+-	      && same_type_p (type, float_type_node))
+-	  || (TYPE_PRECISION (type) < TYPE_PRECISION (ftype)))
++      if ((extended_float_type_p (ftype) || extended_float_type_p (type))
++	  ? /* "from a floating-point type T to another floating-point type
++	       whose floating-point conversion rank is neither greater than
++	       nor equal to that of T".
++	       So, it is ok if
++	       cp_compare_floating_point_conversion_ranks (ftype, type)
++	       returns -2 (type has greater conversion rank than ftype)
++	       or [-1..1] (type has equal conversion rank as ftype, possibly
++	       different subrank.  Only do this if at least one of the
++	       types is extended floating-point type, otherwise keep doing
++	       what we did before (for the sake of non-standard
++	       backend types).  */
++	    cp_compare_floating_point_conversion_ranks (ftype, type) >= 2
++	  : ((same_type_p (ftype, long_double_type_node)
++	      && (same_type_p (type, double_type_node)
++		  || same_type_p (type, float_type_node)))
++	     || (same_type_p (ftype, double_type_node)
++		 && same_type_p (type, float_type_node))
++	     || (TYPE_PRECISION (type) < TYPE_PRECISION (ftype))))
+ 	{
+ 	  if (TREE_CODE (init) == REAL_CST)
+ 	    {
+diff --git a/gcc/testsuite/g++.dg/cpp23/ext-floating.h b/gcc/testsuite/g++.dg/cpp23/ext-floating.h
+new file mode 100644
+index 00000000000..ffd9e636a0d
+--- /dev/null
++++ b/gcc/testsuite/g++.dg/cpp23/ext-floating.h
+@@ -0,0 +1,30 @@
++// P1467R9 - Extended floating-point types and standard names.
++
++namespace std
++{
++  #ifdef __STDCPP_FLOAT16_T__
++  using float16_t = _Float16;
++  #endif
++  #ifdef __STDCPP_FLOAT32_T__
++  using float32_t = _Float32;
++  #endif
++  #ifdef __STDCPP_FLOAT64_T__
++  using float64_t = _Float64;
++  #endif
++  #ifdef __STDCPP_FLOAT128_T__
++  using float128_t = _Float128;
++  #endif
++  #undef __STDCPP_BFLOAT16_T__
++  #ifdef __STDCPP_BFLOAT16_T__
++  using bfloat16_t = __bf16; // ???
++  #endif
++  template<typename T, T v> struct integral_constant {
++    static constexpr T value = v;
++  };
++  typedef integral_constant<bool, false> false_type;
++  typedef integral_constant<bool, true> true_type;
++  template<class T, class U>
++  struct is_same : std::false_type {};
++  template <class T>
++  struct is_same<T, T> : std::true_type {};
++}
+diff --git a/gcc/testsuite/g++.dg/cpp23/ext-floating1.C b/gcc/testsuite/g++.dg/cpp23/ext-floating1.C
+new file mode 100644
+index 00000000000..63232afada8
+--- /dev/null
++++ b/gcc/testsuite/g++.dg/cpp23/ext-floating1.C
+@@ -0,0 +1,447 @@
++// P1467R9 - Extended floating-point types and standard names.
++// { dg-do compile { target c++23 } }
++// { dg-options "" }
++
++#include "ext-floating.h"
++
++#ifdef __STRICT_ANSI__
++#undef __SIZEOF_FLOAT128__
++#endif
++
++using namespace std;
++
++static_assert (!is_same<float, double>::value);
++static_assert (!is_same<float, long double>::value);
++static_assert (!is_same<double, long double>::value);
++static_assert (is_same<decltype (0.0f), float>::value);
++static_assert (is_same<decltype (0.0F), float>::value);
++static_assert (is_same<decltype (0.0), double>::value);
++static_assert (is_same<decltype (0.0l), long double>::value);
++static_assert (is_same<decltype (0.0L), long double>::value);
++static_assert (is_same<decltype (0.0f + 0.0F), float>::value);
++static_assert (is_same<decltype (0.0F + 0.0f), float>::value);
++static_assert (is_same<decltype (0.0 + 0.0), double>::value);
++static_assert (is_same<decltype (0.0l + 0.0L), long double>::value);
++static_assert (is_same<decltype (0.0L + 0.0l), long double>::value);
++#ifdef __SIZEOF_FLOAT128__
++static_assert (is_same<decltype (0.0q), __float128>::value);
++static_assert (is_same<decltype (0.0Q), __float128>::value);
++static_assert (is_same<decltype (0.0q + 0.0q), __float128>::value);
++static_assert (is_same<decltype (0.0Q + 0.0Q), __float128>::value);
++#endif
++#ifdef __STDCPP_FLOAT16_T__
++static_assert (!is_same<float, float16_t>::value);
++static_assert (!is_same<double, float16_t>::value);
++static_assert (!is_same<long double, float16_t>::value);
++static_assert (is_same<decltype (0.0f16), float16_t>::value);
++static_assert (is_same<decltype (0.0F16), float16_t>::value);
++static_assert (is_same<decltype (0.0f16 + 0.0f16), float16_t>::value);
++static_assert (is_same<decltype (0.0F16 + 0.0F16), float16_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT32_T__
++static_assert (!is_same<float, float32_t>::value);
++static_assert (!is_same<double, float32_t>::value);
++static_assert (!is_same<long double, float32_t>::value);
++static_assert (!is_same<decltype (0.0f), float32_t>::value);
++static_assert (!is_same<decltype (0.0F), float32_t>::value);
++static_assert (is_same<decltype (0.0f32), float32_t>::value);
++static_assert (is_same<decltype (0.0F32), float32_t>::value);
++static_assert (!is_same<decltype (0.0f32), float>::value);
++static_assert (!is_same<decltype (0.0F32), float>::value);
++static_assert (is_same<decltype (0.0f32 + 0.0f32), float32_t>::value);
++static_assert (is_same<decltype (0.0F32 + 0.0F32), float32_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT64_T__
++static_assert (!is_same<float, float64_t>::value);
++static_assert (!is_same<double, float64_t>::value);
++static_assert (!is_same<long double, float64_t>::value);
++static_assert (!is_same<decltype (0.0), float64_t>::value);
++static_assert (is_same<decltype (0.0f64), float64_t>::value);
++static_assert (is_same<decltype (0.0F64), float64_t>::value);
++static_assert (!is_same<decltype (0.0f64), double>::value);
++static_assert (!is_same<decltype (0.0F64), double>::value);
++static_assert (is_same<decltype (0.0f64 + 0.0f64), float64_t>::value);
++static_assert (is_same<decltype (0.0F64 + 0.0F64), float64_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT128_T__
++static_assert (!is_same<float, float128_t>::value);
++static_assert (!is_same<double, float128_t>::value);
++static_assert (!is_same<long double, float128_t>::value);
++static_assert (!is_same<decltype (0.0l), float128_t>::value);
++static_assert (!is_same<decltype (0.0L), float128_t>::value);
++static_assert (is_same<decltype (0.0f128), float128_t>::value);
++static_assert (is_same<decltype (0.0F128), float128_t>::value);
++static_assert (!is_same<decltype (0.0f128), long double>::value);
++static_assert (!is_same<decltype (0.0F128), long double>::value);
++static_assert (is_same<decltype (0.0f128 + 0.0f128), float128_t>::value);
++static_assert (is_same<decltype (0.0F128 + 0.0F128), float128_t>::value);
++#ifdef __SIZEOF_FLOAT128__
++static_assert (!is_same<float128_t, __float128>::value);
++static_assert (!is_same<decltype (0.0q), float128_t>::value);
++static_assert (!is_same<decltype (0.0Q), float128_t>::value);
++static_assert (!is_same<decltype (0.0f128), __float128>::value);
++static_assert (!is_same<decltype (0.0F128), __float128>::value);
++#endif
++#endif
++#ifdef __STDCPP_BFLOAT16_T__
++static_assert (!is_same<float, bfloat16_t>::value);
++static_assert (!is_same<double, bfloat16_t>::value);
++static_assert (!is_same<long double, bfloat16_t>::value);
++static_assert (is_same<decltype (0.0bf16), bfloat16_t>::value);
++static_assert (is_same<decltype (0.0BF16), bfloat16_t>::value);
++static_assert (is_same<decltype (0.0bf16 + 0.0bf16), bfloat16_t>::value);
++static_assert (is_same<decltype (0.0BF16 + 0.0BF16), bfloat16_t>::value);
++#endif
++#ifdef __FLT32X_MANT_DIG__
++static_assert (!is_same<float, _Float32x>::value);
++static_assert (!is_same<double, _Float32x>::value);
++static_assert (!is_same<long double, _Float32x>::value);
++static_assert (!is_same<decltype (0.0f), _Float32x>::value);
++static_assert (!is_same<decltype (0.0F), _Float32x>::value);
++static_assert (is_same<decltype (0.0f32x), _Float32x>::value);
++static_assert (is_same<decltype (0.0F32x), _Float32x>::value);
++static_assert (!is_same<decltype (0.0f32x), float>::value);
++static_assert (!is_same<decltype (0.0F32x), float>::value);
++static_assert (is_same<decltype (0.0f32x + 0.0f32x), _Float32x>::value);
++static_assert (is_same<decltype (0.0F32x + 0.0F32x), _Float32x>::value);
++#ifdef __STDCPP_FLOAT16_T__
++static_assert (!is_same<float16_t, _Float32x>::value);
++static_assert (!is_same<decltype (0.0f16), _Float32x>::value);
++static_assert (!is_same<decltype (0.0F16), _Float32x>::value);
++static_assert (!is_same<decltype (0.0f32x), float16_t>::value);
++static_assert (!is_same<decltype (0.0F32x), float16_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT32_T__
++static_assert (!is_same<float32_t, _Float32x>::value);
++static_assert (!is_same<decltype (0.0f32), _Float32x>::value);
++static_assert (!is_same<decltype (0.0F32), _Float32x>::value);
++static_assert (!is_same<decltype (0.0f32x), float32_t>::value);
++static_assert (!is_same<decltype (0.0F32x), float32_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT64_T__
++static_assert (!is_same<float64_t, _Float32x>::value);
++static_assert (!is_same<decltype (0.0f64), _Float32x>::value);
++static_assert (!is_same<decltype (0.0F64), _Float32x>::value);
++static_assert (!is_same<decltype (0.0f32x), float64_t>::value);
++static_assert (!is_same<decltype (0.0F32x), float64_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT128_T__
++static_assert (!is_same<float128_t, _Float32x>::value);
++static_assert (!is_same<decltype (0.0f128), _Float32x>::value);
++static_assert (!is_same<decltype (0.0F128), _Float32x>::value);
++static_assert (!is_same<decltype (0.0f32x), float128_t>::value);
++static_assert (!is_same<decltype (0.0F32x), float128_t>::value);
++#endif
++#endif
++#ifdef __FLT64X_MANT_DIG__
++static_assert (!is_same<float, _Float64x>::value);
++static_assert (!is_same<double, _Float64x>::value);
++static_assert (!is_same<long double, _Float64x>::value);
++static_assert (!is_same<decltype (0.0), _Float64x>::value);
++static_assert (is_same<decltype (0.0f64x), _Float64x>::value);
++static_assert (is_same<decltype (0.0F64x), _Float64x>::value);
++static_assert (!is_same<decltype (0.0f64x), double>::value);
++static_assert (!is_same<decltype (0.0F64x), double>::value);
++static_assert (is_same<decltype (0.0f64x + 0.0f64x), _Float64x>::value);
++static_assert (is_same<decltype (0.0F64x + 0.0F64x), _Float64x>::value);
++#ifdef __STDCPP_FLOAT16_T__
++static_assert (!is_same<float16_t, _Float64x>::value);
++static_assert (!is_same<decltype (0.0f16), _Float64x>::value);
++static_assert (!is_same<decltype (0.0F16), _Float64x>::value);
++static_assert (!is_same<decltype (0.0f64x), float16_t>::value);
++static_assert (!is_same<decltype (0.0F64x), float16_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT32_T__
++static_assert (!is_same<float32_t, _Float64x>::value);
++static_assert (!is_same<decltype (0.0f32), _Float64x>::value);
++static_assert (!is_same<decltype (0.0F32), _Float64x>::value);
++static_assert (!is_same<decltype (0.0f64x), float32_t>::value);
++static_assert (!is_same<decltype (0.0F64x), float32_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT64_T__
++static_assert (!is_same<float64_t, _Float64x>::value);
++static_assert (!is_same<decltype (0.0f64), _Float64x>::value);
++static_assert (!is_same<decltype (0.0F64), _Float64x>::value);
++static_assert (!is_same<decltype (0.0f64x), float64_t>::value);
++static_assert (!is_same<decltype (0.0F64x), float64_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT128_T__
++static_assert (!is_same<float128_t, _Float64x>::value);
++static_assert (!is_same<decltype (0.0f128), _Float64x>::value);
++static_assert (!is_same<decltype (0.0F128), _Float64x>::value);
++static_assert (!is_same<decltype (0.0f64x), float128_t>::value);
++static_assert (!is_same<decltype (0.0F64x), float128_t>::value);
++#endif
++#ifdef __SIZEOF_FLOAT128__
++static_assert (!is_same<_Float64x, __float128>::value);
++static_assert (!is_same<decltype (0.0q), _Float64x>::value);
++static_assert (!is_same<decltype (0.0Q), _Float64x>::value);
++static_assert (!is_same<decltype (0.0f64x), __float128>::value);
++static_assert (!is_same<decltype (0.0F64x), __float128>::value);
++#endif
++#endif
++#ifdef __FLT128X_MANT_DIG__
++static_assert (!is_same<float, _Float128x>::value);
++static_assert (!is_same<double, _Float128x>::value);
++static_assert (!is_same<long double, _Float128x>::value);
++static_assert (!is_same<decltype (0.0l), _Float128x>::value);
++static_assert (!is_same<decltype (0.0L), _Float128x>::value);
++static_assert (is_same<decltype (0.0f128x), _Float128x>::value);
++static_assert (is_same<decltype (0.0F128x), _Float128x>::value);
++static_assert (!is_same<decltype (0.0f128x), long double>::value);
++static_assert (!is_same<decltype (0.0F128x), long double>::value);
++static_assert (is_same<decltype (0.0f128x + 0.0f128x), _Float128x>::value);
++static_assert (is_same<decltype (0.0F128x + 0.0F128x), _Float128x>::value);
++#ifdef __STDCPP_FLOAT16_T__
++static_assert (!is_same<float16_t, _Float128x>::value);
++static_assert (!is_same<decltype (0.0f16), _Float128x>::value);
++static_assert (!is_same<decltype (0.0F16), _Float128x>::value);
++static_assert (!is_same<decltype (0.0f128x), float16_t>::value);
++static_assert (!is_same<decltype (0.0F128x), float16_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT32_T__
++static_assert (!is_same<float32_t, _Float128x>::value);
++static_assert (!is_same<decltype (0.0f32), _Float128x>::value);
++static_assert (!is_same<decltype (0.0F32), _Float128x>::value);
++static_assert (!is_same<decltype (0.0f128x), float32_t>::value);
++static_assert (!is_same<decltype (0.0F128x), float32_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT64_T__
++static_assert (!is_same<float64_t, _Float128x>::value);
++static_assert (!is_same<decltype (0.0f64), _Float128x>::value);
++static_assert (!is_same<decltype (0.0F64), _Float128x>::value);
++static_assert (!is_same<decltype (0.0f128x), float64_t>::value);
++static_assert (!is_same<decltype (0.0F128x), float64_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT128_T__
++static_assert (!is_same<float128_t, _Float128x>::value);
++static_assert (!is_same<decltype (0.0f128), _Float128x>::value);
++static_assert (!is_same<decltype (0.0F128), _Float128x>::value);
++static_assert (!is_same<decltype (0.0f128x), float128_t>::value);
++static_assert (!is_same<decltype (0.0F128x), float128_t>::value);
++#endif
++#ifdef __SIZEOF_FLOAT128__
++static_assert (!is_same<_Float128x, __float128>::value);
++static_assert (!is_same<decltype (0.0q), _Float128x>::value);
++static_assert (!is_same<decltype (0.0Q), _Float128x>::value);
++static_assert (!is_same<decltype (0.0f128x), __float128>::value);
++static_assert (!is_same<decltype (0.0F128x), __float128>::value);
++#endif
++#endif
++static_assert (is_same<decltype (0.0f + 0.0), double>::value);
++static_assert (is_same<decltype (0.0 + 0.0F), double>::value);
++static_assert (is_same<decltype (0.0L + 0.0), long double>::value);
++static_assert (is_same<decltype (0.0 + 0.0L), long double>::value);
++static_assert (is_same<decltype (0.0L + 0.0f), long double>::value);
++static_assert (is_same<decltype (0.0F + 0.0l), long double>::value);
++#if defined(__STDCPP_FLOAT16_T__) && defined(__STDCPP_FLOAT32_T__)
++static_assert (!is_same<float16_t, float32_t>::value);
++static_assert (is_same<decltype (0.0f16 + 0.0f32), float32_t>::value);
++static_assert (is_same<decltype (0.0F32 + 0.0F16), float32_t>::value);
++#endif
++#if defined(__STDCPP_FLOAT16_T__) && defined(__STDCPP_FLOAT64_T__)
++static_assert (!is_same<float16_t, float64_t>::value);
++static_assert (is_same<decltype (0.0f16 + 0.0f64), float64_t>::value);
++static_assert (is_same<decltype (0.0F64 + 0.0F16), float64_t>::value);
++#endif
++#if defined(__STDCPP_FLOAT16_T__) && defined(__STDCPP_FLOAT128_T__)
++static_assert (!is_same<float16_t, float128_t>::value);
++static_assert (is_same<decltype (0.0f16 + 0.0f128), float128_t>::value);
++static_assert (is_same<decltype (0.0F128 + 0.0F16), float128_t>::value);
++#endif
++#if defined(__STDCPP_FLOAT16_T__) && defined(__FLT32X_MANT_DIG__)
++static_assert (is_same<decltype (0.0f16 + 0.0f32x), _Float32x>::value);
++static_assert (is_same<decltype (0.0F32x + 0.0F16), _Float32x>::value);
++#endif
++#if defined(__STDCPP_FLOAT16_T__) && defined(__FLT64X_MANT_DIG__)
++static_assert (is_same<decltype (0.0f16 + 0.0f64x), _Float64x>::value);
++static_assert (is_same<decltype (0.0F64x + 0.0F16), _Float64x>::value);
++#endif
++#if defined(__STDCPP_FLOAT16_T__) && defined(__FLT128X_MANT_DIG__)
++static_assert (is_same<decltype (0.0f16 + 0.0f128x), _Float128x>::value);
++static_assert (is_same<decltype (0.0F128x + 0.0F16), _Float128x>::value);
++#endif
++#if defined(__STDCPP_FLOAT32_T__) && defined(__STDCPP_FLOAT64_T__)
++static_assert (!is_same<float32_t, float64_t>::value);
++static_assert (is_same<decltype (0.0f32 + 0.0f64), float64_t>::value);
++static_assert (is_same<decltype (0.0F64 + 0.0F32), float64_t>::value);
++#endif
++#if defined(__STDCPP_FLOAT32_T__) && defined(__STDCPP_FLOAT128_T__)
++static_assert (!is_same<float32_t, float128_t>::value);
++static_assert (is_same<decltype (0.0f32 + 0.0f128), float128_t>::value);
++static_assert (is_same<decltype (0.0F128 + 0.0F32), float128_t>::value);
++#endif
++#if defined(__STDCPP_FLOAT32_T__) && defined(__FLT32X_MANT_DIG__)
++static_assert (is_same<decltype (0.0f32 + 0.0f32x), _Float32x>::value);
++static_assert (is_same<decltype (0.0F32x + 0.0F32), _Float32x>::value);
++#endif
++#if defined(__STDCPP_FLOAT32_T__) && defined(__FLT64X_MANT_DIG__)
++static_assert (is_same<decltype (0.0f32 + 0.0f64x), _Float64x>::value);
++static_assert (is_same<decltype (0.0F64x + 0.0F32), _Float64x>::value);
++#endif
++#if defined(__STDCPP_FLOAT32_T__) && defined(__FLT128X_MANT_DIG__)
++static_assert (is_same<decltype (0.0f32 + 0.0f128x), _Float128x>::value);
++static_assert (is_same<decltype (0.0F128x + 0.0F32), _Float128x>::value);
++#endif
++#if defined(__STDCPP_FLOAT64_T__) && defined(__STDCPP_FLOAT128_T__)
++static_assert (!is_same<float64_t, float128_t>::value);
++static_assert (is_same<decltype (0.0f64 + 0.0f128), float128_t>::value);
++static_assert (is_same<decltype (0.0F128 + 0.0F64), float128_t>::value);
++#endif
++#if defined(__STDCPP_FLOAT64_T__) && defined(__FLT32X_MANT_DIG__) \
++    && __FLT64_MAX_EXP__ == __FLT32X_MAX_EXP__ \
++    && __FLT64_MANT_DIG__ == __FLT32X_MANT_DIG__
++static_assert (is_same<decltype (0.0f64 + 0.0f32x), float64_t>::value);
++static_assert (is_same<decltype (0.0F32x + 0.0F64), float64_t>::value);
++#endif
++#if defined(__STDCPP_FLOAT64_T__) && defined(__FLT64X_MANT_DIG__)
++static_assert (is_same<decltype (0.0f64 + 0.0f64x), _Float64x>::value);
++static_assert (is_same<decltype (0.0F64x + 0.0F64), _Float64x>::value);
++#endif
++#if defined(__STDCPP_FLOAT64_T__) && defined(__FLT128X_MANT_DIG__)
++static_assert (is_same<decltype (0.0f64 + 0.0f128x), _Float128x>::value);
++static_assert (is_same<decltype (0.0F128x + 0.0F64), _Float128x>::value);
++#endif
++#if defined(__STDCPP_FLOAT128_T__) && defined(__FLT32X_MANT_DIG__) \
++    && __FLT128_MAX_EXP__ >= __FLT32X_MAX_EXP__ \
++    && __FLT128_MANT_DIG__ >= __FLT32X_MANT_DIG__
++static_assert (is_same<decltype (0.0f128 + 0.0f32x), float128_t>::value);
++static_assert (is_same<decltype (0.0F32x + 0.0F128), float128_t>::value);
++#endif
++#if defined(__STDCPP_FLOAT128_T__) && defined(__FLT64X_MANT_DIG__) \
++    && __FLT128_MAX_EXP__ >= __FLT64X_MAX_EXP__ \
++    && __FLT128_MANT_DIG__ >= __FLT64X_MANT_DIG__
++static_assert (is_same<decltype (0.0f128 + 0.0f64x), float128_t>::value);
++static_assert (is_same<decltype (0.0F64x + 0.0F128), float128_t>::value);
++#endif
++#if defined(__STDCPP_FLOAT128_T__) && defined(__FLT128X_MANT_DIG__)
++static_assert (is_same<decltype (0.0f128 + 0.0f128x), _Float128>::value);
++static_assert (is_same<decltype (0.0F128x + 0.0F128), _Float128>::value);
++#endif
++#if defined(__STDCPP_BFLOAT16_T__) && defined(__STDCPP_FLOAT32_T__)
++static_assert (!is_same<bfloat16_t, float32_t>::value);
++static_assert (is_same<decltype (0.0bf16 + 0.0f32), float32_t>::value);
++static_assert (is_same<decltype (0.0F32 + 0.0BF16), float32_t>::value);
++#endif
++#if defined(__STDCPP_BFLOAT16_T__) && defined(__STDCPP_FLOAT64_T__)
++static_assert (!is_same<bfloat16_t, float64_t>::value);
++static_assert (is_same<decltype (0.0bf16 + 0.0f64), float64_t>::value);
++static_assert (is_same<decltype (0.0F64 + 0.0BF16), float64_t>::value);
++#endif
++#if defined(__STDCPP_BFLOAT16_T__) && defined(__STDCPP_FLOAT128_T__)
++static_assert (!is_same<bfloat16_t, float128_t>::value);
++static_assert (is_same<decltype (0.0bf16 + 0.0f128), float128_t>::value);
++static_assert (is_same<decltype (0.0F128 + 0.0BF16), float128_t>::value);
++#endif
++#ifdef __STDCPP_FLOAT16_T__
++#if __FLT_MAX_EXP__ > __FLT16_MAX_EXP__ && __FLT_MANT_DIG__ > __FLT16_MANT_DIG__
++static_assert (is_same<decltype (0.0f + 0.0f16), float>::value);
++static_assert (is_same<decltype (0.0F16 + 0.0F), float>::value);
++#endif
++#if __DBL_MAX_EXP__ > __FLT16_MAX_EXP__ && __DBL_MANT_DIG__ > __FLT16_MANT_DIG__
++static_assert (is_same<decltype (0.0 + 0.0f16), double>::value);
++static_assert (is_same<decltype (0.0F16 + 0.0), double>::value);
++#endif
++#if __LDBL_MAX_EXP__ > __FLT16_MAX_EXP__ && __LDBL_MANT_DIG__ > __FLT16_MANT_DIG__
++static_assert (is_same<decltype (0.0L + 0.0f16), long double>::value);
++static_assert (is_same<decltype (0.0F16 + 0.0l), long double>::value);
++#endif
++#endif
++#ifdef __STDCPP_FLOAT32_T__
++#if __FLT_MAX_EXP__ == __FLT32_MAX_EXP__ && __FLT_MANT_DIG__ == __FLT32_MANT_DIG__
++static_assert (is_same<decltype (0.0f + 0.0f32), float32_t>::value);
++static_assert (is_same<decltype (0.0F32 + 0.0F), float32_t>::value);
++#endif
++#if __DBL_MAX_EXP__ > __FLT32_MAX_EXP__ && __DBL_MANT_DIG__ > __FLT32_MANT_DIG__
++static_assert (is_same<decltype (0.0 + 0.0f32), double>::value);
++static_assert (is_same<decltype (0.0F32 + 0.0), double>::value);
++#endif
++#if __LDBL_MAX_EXP__ > __FLT32_MAX_EXP__ && __LDBL_MANT_DIG__ > __FLT32_MANT_DIG__
++static_assert (is_same<decltype (0.0L + 0.0f32), long double>::value);
++static_assert (is_same<decltype (0.0F32 + 0.0l), long double>::value);
++#endif
++#endif
++#ifdef __STDCPP_FLOAT64_T__
++#if __FLT_MAX_EXP__ < __FLT64_MAX_EXP__ && __FLT_MANT_DIG__ < __FLT64_MANT_DIG__
++static_assert (is_same<decltype (0.0f + 0.0f64), float64_t>::value);
++static_assert (is_same<decltype (0.0F64 + 0.0F), float64_t>::value);
++#endif
++#if __DBL_MAX_EXP__ == __FLT64_MAX_EXP__ && __DBL_MANT_DIG__ == __FLT64_MANT_DIG__
++static_assert (is_same<decltype (0.0 + 0.0f64), float64_t>::value);
++static_assert (is_same<decltype (0.0F64 + 0.0), float64_t>::value);
++#endif
++#if __LDBL_MAX_EXP__ > __FLT64_MAX_EXP__ && __LDBL_MANT_DIG__ > __FLT64_MANT_DIG__
++static_assert (is_same<decltype (0.0L + 0.0f64), long double>::value);
++static_assert (is_same<decltype (0.0F64 + 0.0l), long double>::value);
++#endif
++#if __LDBL_MAX_EXP__ == __FLT64_MAX_EXP__ && __LDBL_MANT_DIG__ == __FLT64_MANT_DIG__ \
++    && __DBL_MAX_EXP__ == __FLT64_MAX_EXP__ && __DBL_MANT_DIG__ == __FLT64_MANT_DIG__
++// An extended floating-point type with the same set of values as more than one
++// cv-unqualified standard floating-point type has a rank equal to the rank of
++// double.
++// Then long double will have higher rank than float64_t.
++static_assert (is_same<decltype (0.0L + 0.0f64), long double>::value);
++static_assert (is_same<decltype (0.0F64 + 0.0l), long double>::value);
++#endif
++#endif
++#ifdef __STDCPP_FLOAT128_T__
++#if __FLT_MAX_EXP__ < __FLT128_MAX_EXP__ && __FLT_MANT_DIG__ < __FLT128_MANT_DIG__
++static_assert (is_same<decltype (0.0f + 0.0f128), float128_t>::value);
++static_assert (is_same<decltype (0.0F128 + 0.0F), float128_t>::value);
++#endif
++#if __DBL_MAX_EXP__ < __FLT128_MAX_EXP__ && __DBL_MANT_DIG__ < __FLT128_MANT_DIG__
++static_assert (is_same<decltype (0.0 + 0.0f128), float128_t>::value);
++static_assert (is_same<decltype (0.0F128 + 0.0), float128_t>::value);
++#endif
++#if __LDBL_MAX_EXP__ <= __FLT128_MAX_EXP__ && __LDBL_MANT_DIG__ <= __FLT128_MANT_DIG__ \
++    && __LDBL_MANT_DIG__ != 106 // IBM extended long double and IEEE quad are unordered.
++static_assert (is_same<decltype (0.0L + 0.0f128), float128_t>::value);
++static_assert (is_same<decltype (0.0F128 + 0.0l), float128_t>::value);
++#endif
++#ifdef __SIZEOF_FLOAT128__
++static_assert (is_same<decltype (0.0Q + 0.0f128), float128_t>::value);
++static_assert (is_same<decltype (0.0F128 + 0.0q), float128_t>::value);
++#endif
++#endif
++#ifdef __STDCPP_BFLOAT16_T__
++#if __FLT_MAX_EXP__ > __BFLT16_MAX_EXP__ && __FLT_MANT_DIG__ > __BFLT16_MANT_DIG__
++static_assert (is_same<decltype (0.0f + 0.0bf16), float>::value);
++static_assert (is_same<decltype (0.0BF16 + 0.0F), float>::value);
++#endif
++#if __DBL_MAX_EXP__ > __BFLT16_MAX_EXP__ && __DBL_MANT_DIG__ > __BFLT16_MANT_DIG__
++static_assert (is_same<decltype (0.0 + 0.0bf16), double>::value);
++static_assert (is_same<decltype (0.0BF16 + 0.0), double>::value);
++#endif
++#if __LDBL_MAX_EXP__ > __BFLT16_MAX_EXP__ && __LDBL_MANT_DIG__ > __BFLT16_MANT_DIG__
++static_assert (is_same<decltype (0.0L + 0.0bf16), long double>::value);
++static_assert (is_same<decltype (0.0BF16 + 0.0l), long double>::value);
++#endif
++#endif
++
++void foo (float) {}
++void foo (double) {}
++void foo (long double) {}
++#ifdef __STDCPP_FLOAT16_T__
++void foo (float16_t) {}
++#endif
++#ifdef __STDCPP_FLOAT32_T__
++void foo (float32_t) {}
++#endif
++#ifdef __STDCPP_FLOAT64_T__
++void foo (float64_t) {}
++#endif
++#ifdef __STDCPP_FLOAT128_T__
++void foo (float128_t) {}
++#endif
++#ifdef __STDCPP_BFLOAT16_T__
++void foo (bfloat16_t) {}
++#endif
++#ifdef __FLT32X_MANT_DIG__
++void foo (_Float32x) {}
++#endif
++#ifdef __FLT64X_MANT_DIG__
++void foo (_Float64x) {}
++#endif
++#ifdef __FLT128X_MANT_DIG__
++void foo (_Float128x) {}
++#endif
+diff --git a/gcc/testsuite/g++.dg/cpp23/ext-floating10.C b/gcc/testsuite/g++.dg/cpp23/ext-floating10.C
+new file mode 100644
+index 00000000000..f5563fedd82
+--- /dev/null
++++ b/gcc/testsuite/g++.dg/cpp23/ext-floating10.C
+@@ -0,0 +1,13 @@
++// P1467R9 - Extended floating-point types and standard names.
++// { dg-do run { target { c++23 && float128_runtime } } }
++// { dg-options "" }
++// { dg-add-options float128 }
++
++#ifndef WIDTH
++#ifndef __STDCPP_FLOAT128_T__
++#error Unexpected
++#endif
++#define WIDTH 128
++#endif
++
++#include "ext-floating7.C"
+diff --git a/gcc/testsuite/g++.dg/cpp23/ext-floating2.C b/gcc/testsuite/g++.dg/cpp23/ext-floating2.C
+new file mode 100644
+index 00000000000..41e9a54ada5
+--- /dev/null
++++ b/gcc/testsuite/g++.dg/cpp23/ext-floating2.C
+@@ -0,0 +1,157 @@
++// P1467R9 - Extended floating-point types and standard names.
++// { dg-do compile { target c++23 } }
++// { dg-options "" }
++
++#include "ext-floating.h"
++
++#ifdef __STRICT_ANSI__
++#undef __SIZEOF_FLOAT128__
++#endif
++
++using namespace std;
++
++float fa = 1.0f;
++float fb = (float) 1.0f;
++float fc = 1.0;
++float fd = (float) 1.0;
++float fe = 1.0L;
++float ff = (float) 1.0L;
++#ifdef __SIZEOF_FLOAT128__
++float fg = 1.0Q;
++float fh = (float) 1.0Q;
++#endif
++double da = 1.0f;
++double db = (double) 1.0f;
++double dc = 1.0;
++double dd = (double) 1.0;
++double de = 1.0L;
++double df = (double) 1.0L;
++#ifdef __SIZEOF_FLOAT128__
++double dg = 1.0Q;
++double dh = (double) 1.0Q;
++#endif
++long double lda = 1.0f;
++long double ldb = (long double) 1.0f;
++long double ldc = 1.0;
++long double ldd = (long double) 1.0;
++long double lde = 1.0L;
++long double ldf = (long double) 1.0L;
++#ifdef __SIZEOF_FLOAT128__
++long double ldg = 1.0Q;
++long double ldh = (long double) 1.0Q;
++__float128 qa = 1.0f;
++__float128 qb = (__float128) 1.0f;
++__float128 qc = 1.0;
++__float128 qd = (__float128) 1.0;
++__float128 qe = 1.0L;
++__float128 qf = (__float128) 1.0L;
++__float128 qg = 1.0Q;
++__float128 qh = (__float128) 1.0Q;
++#endif
++#ifdef __STDCPP_FLOAT16_T__
++float16_t f16a = 1.0F16;
++float16_t f16b = (float16_t) 1.0F16;
++#ifdef __STDCPP_FLOAT32_T__
++float16_t f16c = 1.0F32;		// { dg-warning "converting to 'std::float16_t' \\\{aka '_Float16'\\\} from '_Float32' with greater conversion rank" "" { target { float16 && float32 } } }
++float16_t f16d = (float16_t) 1.0F32;
++#endif
++#ifdef __STDCPP_FLOAT64_T__
++float16_t f16e = 1.0F64;		// { dg-warning "converting to 'std::float16_t' \\\{aka '_Float16'\\\} from '_Float64' with greater conversion rank" "" { target { float16 && float64 } } }
++float16_t f16f = (float16_t) 1.0F64;
++#endif
++#ifdef __STDCPP_FLOAT128_T__
++float16_t f16g = 1.0F128;		// { dg-warning "converting to 'std::float16_t' \\\{aka '_Float16'\\\} from '_Float128' with greater conversion rank" "" { target { float16 && float128 } } }
++float16_t f16h = (float16_t) 1.0F128;
++#endif
++float16_t f16j = (float16_t) 1.0f;
++float16_t f16l = (float16_t) 1.0;
++float16_t f16n = (float16_t) 1.0L;
++#ifdef __SIZEOF_FLOAT128__
++float16_t f16p = (float16_t) 1.0Q;
++#endif
++#endif
++#ifdef __STDCPP_FLOAT32_T__
++#ifdef __STDCPP_FLOAT16_T__
++float32_t f32a = 1.0F16;
++float32_t f32b = (float32_t) 1.0F16;
++#endif
++float32_t f32c = 1.0F32;
++float32_t f32d = (float32_t) 1.0F32;
++#ifdef __STDCPP_FLOAT64_T__
++float32_t f32e = 1.0F64;		// { dg-warning "converting to 'std::float32_t' \\\{aka '_Float32'\\\} from '_Float64' with greater conversion rank" "" { target { float32 && float64 } } }
++float32_t f32f = (float32_t) 1.0F64;
++#endif
++#ifdef __STDCPP_FLOAT128_T__
++float32_t f32g = 1.0F128;		// { dg-warning "converting to 'std::float32_t' \\\{aka '_Float32'\\\} from '_Float128' with greater conversion rank" "" { target { float32 && float128 } } }
++float32_t f32h = (float32_t) 1.0F128;
++#endif
++#if __FLT_MAX_EXP__ <= __FLT32_MAX_EXP__ && __FLT_MANT_DIG__ <= __FLT32_MANT_DIG__
++float32_t f32i = 1.0f;
++#endif
++float32_t f32j = (float32_t) 1.0f;
++float32_t f32l = (float32_t) 1.0;
++float32_t f32n = (float32_t) 1.0L;
++#ifdef __SIZEOF_FLOAT128__
++float32_t f32p = (float32_t) 1.0Q;
++#endif
++#endif
++#ifdef __STDCPP_FLOAT64_T__
++#ifdef __STDCPP_FLOAT16_T__
++float64_t f64a = 1.0F16;
++float64_t f64b = (float64_t) 1.0F16;
++#endif
++#ifdef __STDCPP_FLOAT32_T__
++float64_t f64c = 1.0F32;
++float64_t f64d = (float64_t) 1.0F32;
++#endif
++float64_t f64e = 1.0F64;
++float64_t f64f = (float64_t) 1.0F64;
++#ifdef __STDCPP_FLOAT128_T__
++float64_t f64g = 1.0F128;		// { dg-warning "converting to 'std::float64_t' \\\{aka '_Float64'\\\} from '_Float128' with greater conversion rank" "" { target { float64 && float128 } } }
++float64_t f64h = (float64_t) 1.0F128;
++#endif
++#if __FLT_MAX_EXP__ <= __FLT64_MAX_EXP__ && __FLT_MANT_DIG__ <= __FLT64_MANT_DIG__
++float64_t f64i = 1.0f;
++#endif
++float64_t f64j = (float64_t) 1.0f;
++#if __DBL_MAX_EXP__ <= __FLT64_MAX_EXP__ && __DBL_MANT_DIG__ <= __FLT64_MANT_DIG__
++float64_t f64k = 1.0;
++#endif
++float64_t f64l = (float64_t) 1.0;
++float64_t f64n = (float64_t) 1.0L;
++#ifdef __SIZEOF_FLOAT128__
++float64_t f64p = (float64_t) 1.0Q;
++#endif
++#endif
++#ifdef __STDCPP_FLOAT128_T__
++#ifdef __STDCPP_FLOAT16_T__
++float128_t f128a = 1.0F16;
++float128_t f128b = (float128_t) 1.0F16;
++#endif
++#ifdef __STDCPP_FLOAT32_T__
++float128_t f128c = 1.0F32;
++float128_t f128d = (float128_t) 1.0F32;
++#endif
++#ifdef __STDCPP_FLOAT64_T__
++float128_t f128e = 1.0F64;
++float128_t f128f = (float128_t) 1.0F64;
++#endif
++float128_t f128g = 1.0F128;
++float128_t f128h = (float128_t) 1.0F128;
++#if __FLT_MAX_EXP__ <= __FLT128_MAX_EXP__ && __FLT_MANT_DIG__ <= __FLT128_MANT_DIG__
++float128_t f128i = 1.0f;
++#endif
++float128_t f128j = (float128_t) 1.0f;
++#if __DBL_MAX_EXP__ <= __FLT128_MAX_EXP__ && __DBL_MANT_DIG__ <= __FLT128_MANT_DIG__
++float128_t f128k = 1.0;
++#endif
++float128_t f128l = (float128_t) 1.0;
++#if __LDBL_MAX_EXP__ <= __FLT128_MAX_EXP__ && __LDBL_MANT_DIG__ <= __FLT128_MANT_DIG__ && __LDBL_MANT_DIG__ != 106
++float128_t f128m = 1.0L;
++#endif
++float128_t f128n = (float128_t) 1.0L;
++#ifdef __SIZEOF_FLOAT128__
++float128_t f128o = 1.0Q;
++float128_t f128p = (float128_t) 1.0Q;
++#endif
++#endif
+diff --git a/gcc/testsuite/g++.dg/cpp23/ext-floating3.C b/gcc/testsuite/g++.dg/cpp23/ext-floating3.C
+new file mode 100644
+index 00000000000..ca9399fccd2
+--- /dev/null
++++ b/gcc/testsuite/g++.dg/cpp23/ext-floating3.C
+@@ -0,0 +1,134 @@
++// P1467R9 - Extended floating-point types and standard names.
++// Variant of ext-floating2.C test with x86 specific assumptions
++// about float, double, long double and existence of __float128.
++// And some further tests.
++// { dg-do compile { target { c++23 && { i?86-*-linux* x86_64-*-linux* } } } }
++// { dg-options "" }
++
++#include "ext-floating.h"
++
++#if !defined(__STDCPP_FLOAT32_T__) \
++    || !defined(__STDCPP_FLOAT64_T__) || !defined(__STDCPP_FLOAT128_T__) \
++    || __FLT_MAX_EXP__ != __FLT32_MAX_EXP__ || __FLT_MANT_DIG__ != __FLT32_MANT_DIG__ \
++    || __DBL_MAX_EXP__ != __FLT64_MAX_EXP__ || __DBL_MANT_DIG__ != __FLT64_MANT_DIG__ \
++    || __LDBL_MAX_EXP__ != __FLT128_MAX_EXP__ || __LDBL_MANT_DIG__ >= __FLT128_MANT_DIG__ \
++    || !defined(__SIZEOF_FLOAT128__)
++#error Unexpected set of floating point types
++#endif
++
++using namespace std;
++
++#ifdef __STDCPP_FLOAT16_T__
++float16_t f16i = 1.0f;			// { dg-warning "converting to 'std::float16_t' \\\{aka '_Float16'\\\} from 'float' with greater conversion rank" "" { target float16 } }
++float16_t f16k = 1.0;			// { dg-warning "converting to 'std::float16_t' \\\{aka '_Float16'\\\} from 'double' with greater conversion rank" "" { target float16 } }
++float16_t f16m = 1.0L;			// { dg-warning "converting to 'std::float16_t' \\\{aka '_Float16'\\\} from 'long double' with greater conversion rank" "" { target float16 } }
++float16_t f16o = 1.0Q;			// { dg-warning "converting to 'std::float16_t' \\\{aka '_Float16'\\\} from '__float128' with greater conversion rank" "" { target float16 } }
++#endif
++float32_t f32i = 1.0f;
++float32_t f32k = 1.0;			// { dg-warning "converting to 'std::float32_t' \\\{aka '_Float32'\\\} from 'double' with greater conversion rank" }
++float32_t f32m = 1.0L;			// { dg-warning "converting to 'std::float32_t' \\\{aka '_Float32'\\\} from 'long double' with greater conversion rank" }
++float32_t f32o = 1.0Q;			// { dg-warning "converting to 'std::float32_t' \\\{aka '_Float32'\\\} from '__float128' with greater conversion rank" }
++float64_t f64i = 1.0f;
++float64_t f64k = 1.0;
++float64_t f64m = 1.0L;			// { dg-warning "converting to 'std::float64_t' \\\{aka '_Float64'\\\} from 'long double' with greater conversion rank" }
++float64_t f64o = 1.0Q;			// { dg-warning "converting to 'std::float64_t' \\\{aka '_Float64'\\\} from '__float128' with greater conversion rank" }
++float128_t f128i = 1.0f;
++float128_t f128k = 1.0;
++float128_t f128m = 1.0L;
++float128_t f128o = 1.0Q;
++
++#ifdef __STDCPP_FLOAT16_T__
++constexpr float16_t f16x = 1.0F16;
++#endif
++constexpr float32_t f32x = 2.0F32;
++constexpr float64_t f64x = 3.0F64;
++constexpr float128_t f128x = 4.0F128;
++constexpr float fx = 5.0f;
++constexpr double dx = 6.0;
++constexpr long double ldx = 7.0L;
++
++constexpr int foo (float32_t) { return 1; }
++constexpr int foo (float64_t) { return 2; }
++constexpr int bar (float) { return 3; }
++constexpr int bar (double) { return 4; }
++constexpr int bar (long double) { return 5; }
++constexpr int baz (float32_t) { return 6; }
++constexpr int baz (float64_t) { return 7; }
++constexpr int baz (float128_t) { return 8; }
++constexpr int qux (float64_t) { return 9; }
++constexpr int qux (float32_t) { return 10; }
++constexpr int fred (long double) { return 11; }
++constexpr int fred (double) { return 12; }
++constexpr int fred (float) { return 13; }
++constexpr int thud (float128_t) { return 14; }
++constexpr int thud (float64_t) { return 15; }
++constexpr int thud (float32_t) { return 16; }
++struct S {
++  constexpr operator float32_t () const { return 1.0f32; }
++  constexpr operator float64_t () const { return 2.0f64; }
++};
++struct T {
++  constexpr operator float64_t () const { return 3.0f64; }
++  constexpr operator float32_t () const { return 4.0f32; }
++};
++
++void
++test (S s, T t)
++{
++#ifdef __STDCPP_FLOAT16_T__
++  foo (float16_t (1.0));			// { dg-error "call of overloaded 'foo\\\(std::float16_t\\\)' is ambiguous" "" { target float16 } }
++#endif
++  static_assert (foo (float (2.0)) == 1);
++  static_assert (foo (double (3.0)) == 2);
++  constexpr double x (s);
++  static_assert (x == 2.0);
++#ifdef __STDCPP_FLOAT16_T__
++  bar (f16x);					// { dg-error "call of overloaded 'bar\\\(const std::float16_t\\\&\\\)' is ambiguous" "" { target float16 } }
++#endif
++  static_assert (bar (f32x) == 3);
++  static_assert (bar (f64x) == 4);
++  bar (f128x);					// { dg-error "no matching function for call to 'bar\\\(const std::float128_t\\\&\\\)'" }
++						// { dg-warning "converting to 'float' from 'const std::float128_t' \\\{aka 'const _Float128'\\\} with greater conversion rank" "" { target *-*-* } .-1 }
++						// { dg-warning "converting to 'double' from 'const std::float128_t' \\\{aka 'const _Float128'\\\} with greater conversion rank" "" { target *-*-* } .-2 }
++						// { dg-warning "converting to 'long double' from 'const std::float128_t' \\\{aka 'const _Float128'\\\} with greater conversion rank" "" { target *-*-* } .-3 }
++  static_assert (bar (fx) == 3);
++  static_assert (bar (dx) == 4);
++  static_assert (bar (ldx) == 5);
++#ifdef __STDCPP_FLOAT16_T__
++  baz (f16x);					// { dg-error "call of overloaded 'baz\\\(const std::float16_t\\\&\\\)' is ambiguous" "" { target float16 } }
++#endif
++  static_assert (baz (f32x) == 6);
++  static_assert (baz (f64x) == 7);
++  static_assert (baz (f128x) == 8);
++  static_assert (baz (fx) == 6);
++  static_assert (baz (dx) == 7);
++  static_assert (baz (ldx) == 8);
++#ifdef __STDCPP_FLOAT16_T__
++  qux (float16_t (1.0));			// { dg-error "call of overloaded 'qux\\\(std::float16_t\\\)' is ambiguous" "" { target float16 } }
++#endif
++  static_assert (qux (float (2.0)) == 10);
++  static_assert (qux (double (3.0)) == 9);
++  constexpr double y (t);
++  static_assert (y == 3.0);
++#ifdef __STDCPP_FLOAT16_T__
++  fred (f16x);					// { dg-error "call of overloaded 'fred\\\(const std::float16_t\\\&\\\)' is ambiguous" "" { target float16 } }
++#endif
++  static_assert (fred (f32x) == 13);
++  static_assert (fred (f64x) == 12);
++  fred (f128x);					// { dg-error "no matching function for call to 'fred\\\(const std::float128_t\\\&\\\)'" }
++						// { dg-warning "converting to 'float' from 'const std::float128_t' \\\{aka 'const _Float128'\\\} with greater conversion rank" "" { target *-*-* } .-1 }
++						// { dg-warning "converting to 'double' from 'const std::float128_t' \\\{aka 'const _Float128'\\\} with greater conversion rank" "" { target *-*-* } .-2 }
++						// { dg-warning "converting to 'long double' from 'const std::float128_t' \\\{aka 'const _Float128'\\\} with greater conversion rank" "" { target *-*-* } .-3 }
++  static_assert (fred (fx) == 13);
++  static_assert (fred (dx) == 12);
++  static_assert (fred (ldx) == 11);
++#ifdef __STDCPP_FLOAT16_T__
++  thud (f16x);					// { dg-error "call of overloaded 'thud\\\(const std::float16_t\\\&\\\)' is ambiguous" "" { target float16 } }
++#endif
++  static_assert (thud (f32x) == 16);
++  static_assert (thud (f64x) == 15);
++  static_assert (thud (f128x) == 14);
++  static_assert (thud (fx) == 16);
++  static_assert (thud (dx) == 15);
++  static_assert (thud (ldx) == 14);
++}
+diff --git a/gcc/testsuite/g++.dg/cpp23/ext-floating4.C b/gcc/testsuite/g++.dg/cpp23/ext-floating4.C
+new file mode 100644
+index 00000000000..1bac1051f44
+--- /dev/null
++++ b/gcc/testsuite/g++.dg/cpp23/ext-floating4.C
+@@ -0,0 +1,126 @@
++// P1467R9 - Extended floating-point types and standard names.
++// Variant of ext-floating3.C test with different specific assumptions
++// about float, double, long double.
++// float, double and long double are assumed to be IEEE 754 single, double
++// and quad.
++// { dg-do compile { target { c++23 && { aarch64*-*-* powerpc64le*-*-linux* riscv*-*-* s390*-*-* sparc*-*-linux* } } } }
++// { dg-options "" }
++// { dg-additional-options "-mlong-double-128" { target s390*-*-* sparc*-*-linux* } }
++// { dg-additional-options "-mvsx -mfloat128 -mlong-double-128 -mabi=ieeelongdouble -Wno-psabi" { target powerpc64le*-*-linux* } }
++
++#include "ext-floating.h"
++
++#if !defined(__STDCPP_FLOAT32_T__) \
++    || !defined(__STDCPP_FLOAT64_T__) || !defined(__STDCPP_FLOAT128_T__) \
++    || __FLT_MAX_EXP__ != __FLT32_MAX_EXP__ || __FLT_MANT_DIG__ != __FLT32_MANT_DIG__ \
++    || __DBL_MAX_EXP__ != __FLT64_MAX_EXP__ || __DBL_MANT_DIG__ != __FLT64_MANT_DIG__ \
++    || __LDBL_MAX_EXP__ != __FLT128_MAX_EXP__ || __LDBL_MANT_DIG__ != __FLT128_MANT_DIG__
++#error Unexpected set of floating point types
++#endif
++
++using namespace std;
++
++#ifdef __STDCPP_FLOAT16_T__
++float16_t f16i = 1.0f;			// { dg-warning "converting to 'std::float16_t' \\\{aka '_Float16'\\\} from 'float' with greater conversion rank" "" { target float16 } }
++float16_t f16k = 1.0;			// { dg-warning "converting to 'std::float16_t' \\\{aka '_Float16'\\\} from 'double' with greater conversion rank" "" { target float16 } }
++float16_t f16m = 1.0L;			// { dg-warning "converting to 'std::float16_t' \\\{aka '_Float16'\\\} from 'long double' with greater conversion rank" "" { target float16 } }
++#endif
++float32_t f32i = 1.0f;
++float32_t f32k = 1.0;			// { dg-warning "converting to 'std::float32_t' \\\{aka '_Float32'\\\} from 'double' with greater conversion rank" }
++float32_t f32m = 1.0L;			// { dg-warning "converting to 'std::float32_t' \\\{aka '_Float32'\\\} from 'long double' with greater conversion rank" }
++float64_t f64i = 1.0f;
++float64_t f64k = 1.0;
++float64_t f64m = 1.0L;			// { dg-warning "converting to 'std::float64_t' \\\{aka '_Float64'\\\} from 'long double' with greater conversion rank" }
++float128_t f128i = 1.0f;
++float128_t f128k = 1.0;
++float128_t f128m = 1.0L;
++
++#ifdef __STDCPP_FLOAT16_T__
++constexpr float16_t f16x = 1.0F16;
++#endif
++constexpr float32_t f32x = 2.0F32;
++constexpr float64_t f64x = 3.0F64;
++constexpr float128_t f128x = 4.0F128;
++constexpr float fx = 5.0f;
++constexpr double dx = 6.0;
++constexpr long double ldx = 7.0L;
++
++constexpr int foo (float32_t) { return 1; }
++constexpr int foo (float64_t) { return 2; }
++constexpr int bar (float) { return 3; }
++constexpr int bar (double) { return 4; }
++constexpr int bar (long double) { return 5; }
++constexpr int baz (float32_t) { return 6; }
++constexpr int baz (float64_t) { return 7; }
++constexpr int baz (float128_t) { return 8; }
++constexpr int qux (float64_t) { return 9; }
++constexpr int qux (float32_t) { return 10; }
++constexpr int fred (long double) { return 11; }
++constexpr int fred (double) { return 12; }
++constexpr int fred (float) { return 13; }
++constexpr int thud (float128_t) { return 14; }
++constexpr int thud (float64_t) { return 15; }
++constexpr int thud (float32_t) { return 16; }
++struct S {
++  constexpr operator float32_t () const { return 1.0f32; }
++  constexpr operator float64_t () const { return 2.0f64; }
++};
++struct T {
++  constexpr operator float64_t () const { return 3.0f64; }
++  constexpr operator float32_t () const { return 4.0f32; }
++};
++
++void
++test (S s, T t)
++{
++#ifdef __STDCPP_FLOAT16_T__
++  foo (float16_t (1.0));			// { dg-error "call of overloaded 'foo\\\(std::float16_t\\\)' is ambiguous" "" { target float16 } }
++#endif
++  static_assert (foo (float (2.0)) == 1);
++  static_assert (foo (double (3.0)) == 2);
++  constexpr double x (s);
++  static_assert (x == 2.0);
++#ifdef __STDCPP_FLOAT16_T__
++  bar (f16x);					// { dg-error "call of overloaded 'bar\\\(const std::float16_t\\\&\\\)' is ambiguous" "" { target float16 } }
++#endif
++  static_assert (bar (f32x) == 3);
++  static_assert (bar (f64x) == 4);
++  static_assert (bar (f128x) == 5);
++  static_assert (bar (fx) == 3);
++  static_assert (bar (dx) == 4);
++  static_assert (bar (ldx) == 5);
++#ifdef __STDCPP_FLOAT16_T__
++  baz (f16x);					// { dg-error "call of overloaded 'baz\\\(const std::float16_t\\\&\\\)' is ambiguous" "" { target float16 } }
++#endif
++  static_assert (baz (f32x) == 6);
++  static_assert (baz (f64x) == 7);
++  static_assert (baz (f128x) == 8);
++  static_assert (baz (fx) == 6);
++  static_assert (baz (dx) == 7);
++  static_assert (baz (ldx) == 8);
++#ifdef __STDCPP_FLOAT16_T__
++  qux (float16_t (1.0));			// { dg-error "call of overloaded 'qux\\\(std::float16_t\\\)' is ambiguous" "" { target float16 } }
++#endif
++  static_assert (qux (float (2.0)) == 10);
++  static_assert (qux (double (3.0)) == 9);
++  constexpr double y (t);
++  static_assert (y == 3.0);
++#ifdef __STDCPP_FLOAT16_T__
++  fred (f16x);					// { dg-error "call of overloaded 'fred\\\(const std::float16_t\\\&\\\)' is ambiguous" "" { target float16 } }
++#endif
++  static_assert (fred (f32x) == 13);
++  static_assert (fred (f64x) == 12);
++  static_assert (fred (f128x) == 11);
++  static_assert (fred (fx) == 13);
++  static_assert (fred (dx) == 12);
++  static_assert (fred (ldx) == 11);
++#ifdef __STDCPP_FLOAT16_T__
++  thud (f16x);					// { dg-error "call of overloaded 'thud\\\(const std::float16_t\\\&\\\)' is ambiguous" "" { target float16 } }
++#endif
++  static_assert (thud (f32x) == 16);
++  static_assert (thud (f64x) == 15);
++  static_assert (thud (f128x) == 14);
++  static_assert (thud (fx) == 16);
++  static_assert (thud (dx) == 15);
++  static_assert (thud (ldx) == 14);
++}
+diff --git a/gcc/testsuite/g++.dg/cpp23/ext-floating5.C b/gcc/testsuite/g++.dg/cpp23/ext-floating5.C
+new file mode 100644
+index 00000000000..7c8bf6a946b
+--- /dev/null
++++ b/gcc/testsuite/g++.dg/cpp23/ext-floating5.C
+@@ -0,0 +1,13 @@
++// P1467R9 - Extended floating-point types and standard names.
++// IBM extended long double and _Float128 should have unordered conversion
++// ranks as IBM extended long double has variable precision from 53 bits
++// for denormals to more than 2150 bits for certain numbers.
++// { dg-do compile { target { c++23 && { powerpc*-*-linux* } } } }
++// { dg-require-effective-target ppc_float128_sw }
++// { dg-options "-mvsx -mfloat128 -mlong-double-128 -mabi=ibmlongdouble" }
++
++auto a = 1.0F128 + 1.0L;	// { dg-error "invalid operands to binary \\\+ \\\(have '_Float128' and 'long double'\\\)" }
++auto b = 1.0L + 1.0F128;	// { dg-error "invalid operands to binary \\\+ \\\(have 'long double' and '_Float128'\\\)" }
++bool c;
++auto d = c ? 1.0F128 : 1.0L;	// { dg-error "operands to '\\\?:' of types '_Float128' and 'long double' have unordered conversion rank" }
++auto e = c ? 1.0L : 1.0F128;	// { dg-error "operands to '\\\?:' of types 'long double' and '_Float128' have unordered conversion rank" }
+diff --git a/gcc/testsuite/g++.dg/cpp23/ext-floating6.C b/gcc/testsuite/g++.dg/cpp23/ext-floating6.C
+new file mode 100644
+index 00000000000..70272a1b3c1
+--- /dev/null
++++ b/gcc/testsuite/g++.dg/cpp23/ext-floating6.C
+@@ -0,0 +1,30 @@
++// P1467R9 - Extended floating-point types and standard names.
++// { dg-do compile { target c++23 } }
++// { dg-options "" }
++
++#include "ext-floating.h"
++
++#ifdef __STRICT_ANSI__
++#undef __SIZEOF_FLOAT128__
++#endif
++
++using namespace std;
++
++float foo (float x, float y, float z) { return x * y + z; }
++double foo (double x, double y, double z) { return x * y + z; }
++long double foo (long double x, long double y, long double z) { return x * y + z; }
++#ifdef __STDCPP_FLOAT16_T__
++float16_t foo (float16_t x, float16_t y, float16_t z) { return x * y + z; }
++#endif
++#ifdef __STDCPP_FLOAT32_T__
++float32_t foo (float32_t x, float32_t y, float32_t z) { return x * y + z; }
++#endif
++#ifdef __STDCPP_FLOAT64_T__
++float64_t foo (float64_t x, float64_t y, float64_t z) { return x * y + z; }
++#endif
++#ifdef __STDCPP_FLOAT128_T__
++float128_t foo (float128_t x, float128_t y, float128_t z) { return x * y + z; }
++#endif
++#ifdef __STDCPP_BFLOAT16_T__
++bfloat16_t foo (bfloat16_t x, bfloat16_t y, bfloat16_t z) { return x * y + z; }
++#endif
+diff --git a/gcc/testsuite/g++.dg/cpp23/ext-floating7.C b/gcc/testsuite/g++.dg/cpp23/ext-floating7.C
+new file mode 100644
+index 00000000000..5c30a5979b6
+--- /dev/null
++++ b/gcc/testsuite/g++.dg/cpp23/ext-floating7.C
+@@ -0,0 +1,119 @@
++// P1467R9 - Extended floating-point types and standard names.
++// { dg-do run { target { c++23 && float16_runtime } } }
++// { dg-options "" }
++// { dg-add-options float16 }
++
++#ifndef WIDTH
++#ifndef __STDCPP_FLOAT16_T__
++#error Unexpected
++#endif
++#define WIDTH 16
++#endif
++
++#include <stdarg.h>
++#include "ext-floating.h"
++
++#define CONCATX(X, Y) X ## Y
++#define CONCAT(X, Y) CONCATX (X, Y)
++#define CONCAT3(X, Y, Z) CONCAT (CONCAT (X, Y), Z)
++#define TYPE CONCAT (_Float, WIDTH)
++#define CST(C) CONCAT3 (C, f, WIDTH)
++#define CSTU(C) CONCAT3 (C, F, WIDTH)
++
++extern "C" void abort ();
++
++volatile TYPE a = CST (1.0), b = CSTU (2.5), c = -CST (2.5);
++volatile TYPE a2 = CST (1.0), z = CST (0.0), nz = -CST (0.0);
++
++// These types are not subject to default argument promotions.
++
++TYPE
++vafn (TYPE arg1, ...)
++{
++  va_list ap;
++  TYPE ret;
++  va_start (ap, arg1);
++  ret = arg1 + va_arg (ap, TYPE);
++  va_end (ap);
++  return ret;
++}
++
++TYPE
++fn (TYPE arg)
++{
++  return arg / 4;
++}
++
++int
++main (void)
++{
++  volatile TYPE r;
++  r = -b;
++  if (r != c)
++    abort ();
++  r = a + b;
++  if (r != CST (3.5))
++    abort ();
++  r = a - b;
++  if (r != -CST (1.5))
++    abort ();
++  r = 2 * c;
++  if (r != -5)
++    abort ();
++  r = b * c;
++  if (r != -CST (6.25))
++    abort ();
++  r = b / (a + a);
++  if (r != CST (1.25))
++    abort ();
++  r = c * 3;
++  if (r != -CST (7.5))
++    abort ();
++  volatile int i = r;
++  if (i != -7)
++    abort ();
++  r = vafn (a, c);
++  if (r != -CST (1.5))
++    abort ();
++  r = fn (a);
++  if (r != CST (0.25))
++    abort ();
++  if ((a < b) != 1)
++    abort ();
++  if ((b < a) != 0)
++    abort ();
++  if ((a < a2) != 0)
++    abort ();
++  if ((nz < z) != 0)
++    abort ();
++  if ((a <= b) != 1)
++    abort ();
++  if ((b <= a) != 0)
++    abort ();
++  if ((a <= a2) != 1)
++    abort ();
++  if ((nz <= z) != 1)
++    abort ();
++  if ((a > b) != 0)
++    abort ();
++  if ((b > a) != 1)
++    abort ();
++  if ((a > a2) != 0)
++    abort ();
++  if ((nz > z) != 0)
++    abort ();
++  if ((a >= b) != 0)
++    abort ();
++  if ((b >= a) != 1)
++    abort ();
++  if ((a >= a2) != 1)
++    abort ();
++  if ((nz >= z) != 1)
++    abort ();
++  i = (nz == z);
++  if (i != 1)
++    abort ();
++  i = (a == b);
++  if (i != 0)
++    abort ();
++}
+diff --git a/gcc/testsuite/g++.dg/cpp23/ext-floating8.C b/gcc/testsuite/g++.dg/cpp23/ext-floating8.C
+new file mode 100644
+index 00000000000..afb74a3abad
+--- /dev/null
++++ b/gcc/testsuite/g++.dg/cpp23/ext-floating8.C
+@@ -0,0 +1,13 @@
++// P1467R9 - Extended floating-point types and standard names.
++// { dg-do run { target { c++23 && float32_runtime } } }
++// { dg-options "" }
++// { dg-add-options float32 }
++
++#ifndef WIDTH
++#ifndef __STDCPP_FLOAT32_T__
++#error Unexpected
++#endif
++#define WIDTH 32
++#endif
++
++#include "ext-floating7.C"
+diff --git a/gcc/testsuite/g++.dg/cpp23/ext-floating9.C b/gcc/testsuite/g++.dg/cpp23/ext-floating9.C
+new file mode 100644
+index 00000000000..f0118da30cc
+--- /dev/null
++++ b/gcc/testsuite/g++.dg/cpp23/ext-floating9.C
+@@ -0,0 +1,13 @@
++// P1467R9 - Extended floating-point types and standard names.
++// { dg-do run { target { c++23 && float64_runtime } } }
++// { dg-options "" }
++// { dg-add-options float64 }
++
++#ifndef WIDTH
++#ifndef __STDCPP_FLOAT64_T__
++#error Unexpected
++#endif
++#define WIDTH 64
++#endif
++
++#include "ext-floating7.C"
+diff --git a/gcc/testsuite/g++.target/i386/float16-1.C b/gcc/testsuite/g++.target/i386/float16-1.C
+index 95d1ac27c4f..f96b932b698 100644
+--- a/gcc/testsuite/g++.target/i386/float16-1.C
++++ b/gcc/testsuite/g++.target/i386/float16-1.C
+@@ -1,8 +1,8 @@
+ /* { dg-do compile } */
+ /* { dg-options "-O2 -mno-sse2" } */
+ 
+-_Float16/* { dg-error "does not name a type" } */
++_Float16	/* { dg-error "expected unqualified-id before '_Float16'" } */
+ foo (_Float16 x) 
+ {
+   return x;
+-}
++}		/* { dg-error "'_Float16' is not supported on this target" } */
+diff --git a/gcc/tree-core.h b/gcc/tree-core.h
+index 2383b570f49..745b1525986 100644
+--- a/gcc/tree-core.h
++++ b/gcc/tree-core.h
+@@ -687,6 +687,10 @@ enum tree_index {
+ 			     - TI_FLOATN_NX_TYPE_FIRST		\
+ 			     + 1)
+ 
++  /* Type used by certain backends for __float128, which in C++ should be
++     distinct type from _Float128 for backwards compatibility reasons.  */
++  TI_FLOAT128T_TYPE,
++
+   /* Put the complex types after their component types, so that in (sequential)
+      tree streaming we can assert that their component types have already been
+      handled (see tree-streamer.cc:record_common_node).  */
+diff --git a/gcc/tree.cc b/gcc/tree.cc
+index df441c6b223..f575bd23dd9 100644
+--- a/gcc/tree.cc
++++ b/gcc/tree.cc
+@@ -9447,6 +9447,7 @@ build_common_tree_nodes (bool signed_char)
+       layout_type (FLOATN_NX_TYPE_NODE (i));
+       SET_TYPE_MODE (FLOATN_NX_TYPE_NODE (i), mode);
+     }
++  float128t_type_node = float128_type_node;
+ 
+   float_ptr_type_node = build_pointer_type (float_type_node);
+   double_ptr_type_node = build_pointer_type (double_type_node);
+diff --git a/gcc/tree.h b/gcc/tree.h
+index c92c5bf344b..071d93d8f45 100644
+--- a/gcc/tree.h
++++ b/gcc/tree.h
+@@ -4289,6 +4289,10 @@ tree_strip_any_location_wrapper (tree exp)
+ #define float64x_type_node		global_trees[TI_FLOAT64X_TYPE]
+ #define float128x_type_node		global_trees[TI_FLOAT128X_TYPE]
+ 
++/* Type used by certain backends for __float128, which in C++ should be
++   distinct type from _Float128 for backwards compatibility reasons.  */
++#define float128t_type_node		global_trees[TI_FLOAT128T_TYPE]
++
+ #define float_ptr_type_node		global_trees[TI_FLOAT_PTR_TYPE]
+ #define double_ptr_type_node		global_trees[TI_DOUBLE_PTR_TYPE]
+ #define long_double_ptr_type_node	global_trees[TI_LONG_DOUBLE_PTR_TYPE]
+diff --git a/include/demangle.h b/include/demangle.h
+index 44a27374d4f..67f0b84cfb7 100644
+--- a/include/demangle.h
++++ b/include/demangle.h
+@@ -451,7 +451,16 @@ enum demangle_component_type
+   DEMANGLE_COMPONENT_NOEXCEPT,
+   DEMANGLE_COMPONENT_THROW_SPEC,
+ 
+-  DEMANGLE_COMPONENT_STRUCTURED_BINDING
++  DEMANGLE_COMPONENT_STRUCTURED_BINDING,
++
++  DEMANGLE_COMPONENT_MODULE_NAME,
++  DEMANGLE_COMPONENT_MODULE_PARTITION,
++  DEMANGLE_COMPONENT_MODULE_INIT,
++
++  /* A builtin type with argument.  This holds the builtin type
++     information.  */
++  DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE
++
+ };
+ 
+ /* Types which are only used internally.  */
+@@ -538,6 +547,15 @@ struct demangle_component
+       const struct demangle_builtin_type_info *type;
+     } s_builtin;
+ 
++    /* For DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE.  */
++    struct
++    {
++      /* Builtin type.  */
++      const struct demangle_builtin_type_info *type;
++      short arg;
++      char suffix;
++    } s_extended_builtin;
++
+     /* For DEMANGLE_COMPONENT_SUB_STD.  */
+     struct
+     {
+diff --git a/libcpp/expr.cc b/libcpp/expr.cc
+index 78c5c3eeb10..749b876fccf 100644
+--- a/libcpp/expr.cc
++++ b/libcpp/expr.cc
+@@ -215,7 +215,6 @@ interpret_float_suffix (cpp_reader *pfile, const uchar *s, size_t len)
+ 	case 'f': case 'F':
+ 	  f++;
+ 	  if (len > 0
+-	      && !CPP_OPTION (pfile, cplusplus)
+ 	      && s[1] >= '1'
+ 	      && s[1] <= '9'
+ 	      && fn_bits == 0)
+diff --git a/libiberty/cp-demangle.c b/libiberty/cp-demangle.c
+index cf451c5aff2..581af785b0d 100644
+--- a/libiberty/cp-demangle.c
++++ b/libiberty/cp-demangle.c
+@@ -646,6 +646,13 @@ d_dump (struct demangle_component *dc, int indent)
+     case DEMANGLE_COMPONENT_BUILTIN_TYPE:
+       printf ("builtin type %s\n", dc->u.s_builtin.type->name);
+       return;
++    case DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE:
++      {
++	char suffix[2] = { dc->u.s_extended_builtin.type->suffix, 0 };
++	printf ("builtin type %s%d%s\n", dc->u.s_extended_builtin.type->name,
++		dc->u.s_extended_builtin.type->arg, suffix);
++      }
++      return;
+     case DEMANGLE_COMPONENT_OPERATOR:
+       printf ("operator %s\n", dc->u.s_operator.op->name);
+       return;
+@@ -769,11 +776,6 @@ d_dump (struct demangle_component *dc, int indent)
+     case DEMANGLE_COMPONENT_PTRMEM_TYPE:
+       printf ("pointer to member type\n");
+       break;
+-    case DEMANGLE_COMPONENT_FIXED_TYPE:
+-      printf ("fixed-point type, accum? %d, sat? %d\n",
+-              dc->u.s_fixed.accum, dc->u.s_fixed.sat);
+-      d_dump (dc->u.s_fixed.length, indent + 2);
+-      break;
+     case DEMANGLE_COMPONENT_ARGLIST:
+       printf ("argument list\n");
+       break;
+@@ -1103,6 +1105,28 @@ d_make_builtin_type (struct d_info *di,
+   return p;
+ }
+ 
++/* Add a new extended builtin type component.  */
++
++static struct demangle_component *
++d_make_extended_builtin_type (struct d_info *di,
++			      const struct demangle_builtin_type_info *type,
++			      short arg, char suffix)
++{
++  struct demangle_component *p;
++
++  if (type == NULL)
++    return NULL;
++  p = d_make_empty (di);
++  if (p != NULL)
++    {
++      p->type = DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE;
++      p->u.s_extended_builtin.type = type;
++      p->u.s_extended_builtin.arg = arg;
++      p->u.s_extended_builtin.suffix = suffix;
++    }
++  return p;
++}
++
+ /* Add a new operator component.  */
+ 
+ static struct demangle_component *
+@@ -2404,6 +2428,7 @@ cplus_demangle_builtin_types[D_BUILTIN_TYPE_COUNT] =
+   /* 32 */ { NL ("char32_t"),	NL ("char32_t"),	D_PRINT_DEFAULT },
+   /* 33 */ { NL ("decltype(nullptr)"),	NL ("decltype(nullptr)"),
+ 	     D_PRINT_DEFAULT },
++  /* 34 */ { NL ("_Float"),	NL ("_Float"),		D_PRINT_FLOAT },
+ };
+ 
+ CP_STATIC_IF_GLIBCPP_V3
+@@ -2667,19 +2692,26 @@ cplus_demangle_type (struct d_info *di)
+ 	  break;
+ 
+ 	case 'F':
+-	  /* Fixed point types. DF<int bits><length><fract bits><sat>  */
+-	  ret = d_make_empty (di);
+-	  ret->type = DEMANGLE_COMPONENT_FIXED_TYPE;
+-	  if ((ret->u.s_fixed.accum = IS_DIGIT (d_peek_char (di))))
+-	    /* For demangling we don't care about the bits.  */
+-	    d_number (di);
+-	  ret->u.s_fixed.length = cplus_demangle_type (di);
+-	  if (ret->u.s_fixed.length == NULL)
+-	    return NULL;
+-	  d_number (di);
+-	  peek = d_next_char (di);
+-	  ret->u.s_fixed.sat = (peek == 's');
+-	  break;
++	  /* DF<number>_ - _Float<number>.
++	     DF<number>x - _Float<number>x.  */
++	  {
++	    int arg = d_number (di);
++	    char buf[12];
++	    char suffix = 0;
++	    if (d_peek_char (di) == 'x')
++	      suffix = 'x';
++	    if (!suffix && d_peek_char (di) != '_')
++	      return NULL;
++	    ret
++	      = d_make_extended_builtin_type (di,
++					      &cplus_demangle_builtin_types[34],
++					      arg, suffix);
++	    d_advance (di, 1);
++	    sprintf (buf, "%d", arg);
++	    di->expansion += ret->u.s_extended_builtin.type->len
++			     + strlen (buf) + (suffix != 0);
++	    break;
++	  }
+ 
+ 	case 'v':
+ 	  ret = d_vector_type (di);
+@@ -4142,11 +4174,16 @@ d_count_templates_scopes (struct d_print_info *dpi,
+     case DEMANGLE_COMPONENT_FUNCTION_PARAM:
+     case DEMANGLE_COMPONENT_SUB_STD:
+     case DEMANGLE_COMPONENT_BUILTIN_TYPE:
++    case DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE:
+     case DEMANGLE_COMPONENT_OPERATOR:
+     case DEMANGLE_COMPONENT_CHARACTER:
+     case DEMANGLE_COMPONENT_NUMBER:
+     case DEMANGLE_COMPONENT_UNNAMED_TYPE:
+     case DEMANGLE_COMPONENT_STRUCTURED_BINDING:
++    case DEMANGLE_COMPONENT_MODULE_NAME:
++    case DEMANGLE_COMPONENT_MODULE_PARTITION:
++    case DEMANGLE_COMPONENT_MODULE_INIT:
++    case DEMANGLE_COMPONENT_FIXED_TYPE:
+       break;
+ 
+     case DEMANGLE_COMPONENT_TEMPLATE:
+@@ -4246,10 +4283,6 @@ d_count_templates_scopes (struct d_print_info *dpi,
+       d_count_templates_scopes (dpi, dc->u.s_extended_operator.name);
+       break;
+ 
+-    case DEMANGLE_COMPONENT_FIXED_TYPE:
+-      d_count_templates_scopes (dpi, dc->u.s_fixed.length);
+-      break;
+-
+     case DEMANGLE_COMPONENT_GLOBAL_CONSTRUCTORS:
+     case DEMANGLE_COMPONENT_GLOBAL_DESTRUCTORS:
+       d_count_templates_scopes (dpi, d_left (dc));
+@@ -4516,11 +4549,11 @@ d_find_pack (struct d_print_info *dpi,
+     case DEMANGLE_COMPONENT_TAGGED_NAME:
+     case DEMANGLE_COMPONENT_OPERATOR:
+     case DEMANGLE_COMPONENT_BUILTIN_TYPE:
++    case DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE:
+     case DEMANGLE_COMPONENT_SUB_STD:
+     case DEMANGLE_COMPONENT_CHARACTER:
+     case DEMANGLE_COMPONENT_FUNCTION_PARAM:
+     case DEMANGLE_COMPONENT_UNNAMED_TYPE:
+-    case DEMANGLE_COMPONENT_FIXED_TYPE:
+     case DEMANGLE_COMPONENT_DEFAULT_ARG:
+     case DEMANGLE_COMPONENT_NUMBER:
+       return NULL;
+@@ -5299,6 +5332,14 @@ d_print_comp_inner (struct d_print_info *dpi, int options,
+ 			 dc->u.s_builtin.type->java_len);
+       return;
+ 
++    case DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE:
++      d_append_buffer (dpi, dc->u.s_extended_builtin.type->name,
++		       dc->u.s_extended_builtin.type->len);
++      d_append_num (dpi, dc->u.s_extended_builtin.arg);
++      if (dc->u.s_extended_builtin.suffix)
++	d_append_buffer (dpi, &dc->u.s_extended_builtin.suffix, 1);
++      return;
++
+     case DEMANGLE_COMPONENT_VENDOR_TYPE:
+       d_print_comp (dpi, options, d_left (dc));
+       return;
+@@ -5437,22 +5478,6 @@ d_print_comp_inner (struct d_print_info *dpi, int options,
+ 	return;
+       }
+ 
+-    case DEMANGLE_COMPONENT_FIXED_TYPE:
+-      if (dc->u.s_fixed.sat)
+-	d_append_string (dpi, "_Sat ");
+-      /* Don't print "int _Accum".  */
+-      if (dc->u.s_fixed.length->u.s_builtin.type
+-	  != &cplus_demangle_builtin_types['i'-'a'])
+-	{
+-	  d_print_comp (dpi, options, dc->u.s_fixed.length);
+-	  d_append_char (dpi, ' ');
+-	}
+-      if (dc->u.s_fixed.accum)
+-	d_append_string (dpi, "_Accum");
+-      else
+-	d_append_string (dpi, "_Fract");
+-      return;
+-
+     case DEMANGLE_COMPONENT_ARGLIST:
+     case DEMANGLE_COMPONENT_TEMPLATE_ARGLIST:
+       if (d_left (dc) != NULL)
+diff --git a/libiberty/cp-demangle.h b/libiberty/cp-demangle.h
+index c6445036d67..c5d046b3f01 100644
+--- a/libiberty/cp-demangle.h
++++ b/libiberty/cp-demangle.h
+@@ -180,7 +180,7 @@ d_advance (struct d_info *di, int i)
+ extern const struct demangle_operator_info cplus_demangle_operators[];
+ #endif
+ 
+-#define D_BUILTIN_TYPE_COUNT (34)
++#define D_BUILTIN_TYPE_COUNT (35)
+ 
+ CP_STATIC_IF_GLIBCPP_V3
+ const struct demangle_builtin_type_info
+diff --git a/libiberty/testsuite/demangle-expected b/libiberty/testsuite/demangle-expected
+index 2b0b531d4bf..c77b111e1b7 100644
+--- a/libiberty/testsuite/demangle-expected
++++ b/libiberty/testsuite/demangle-expected
+@@ -1242,8 +1242,12 @@ _ZNSt9_Any_data9_M_accessIPZ4postISt8functionIFvvEEEvOT_EUlvE_EERS5_v
+ post<std::function<void ()> >(std::function<void ()>&&)::{lambda()#1}*& std::_Any_data::_M_access<post<std::function<void ()> >(post<std::function<void ()> >(std::function<void ()>&&)::{lambda()#1}*&&)::{lambda()#1}*>()
+ #
+ --format=auto --no-params
+-_Z3xxxDFyuVb
+-xxx(unsigned long long _Fract, bool volatile)
++_Z3xxxDF16_DF32_DF64_DF128_CDF16_Vb
++xxx(_Float16, _Float32, _Float64, _Float128, _Float16 _Complex, bool volatile)
++xxx
++--format=auto --no-params
++_Z3xxxDF32xDF64xDF128xCDF32xVb
++xxx(_Float32x, _Float64x, _Float128x, _Float32x _Complex, bool volatile)
+ xxx
+ # https://sourceware.org/bugzilla/show_bug.cgi?id=16817
+ --format=auto --no-params
+-- 
+2.41.0
+

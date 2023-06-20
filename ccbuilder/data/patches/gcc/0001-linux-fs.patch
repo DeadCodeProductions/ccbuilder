@@ -1,0 +1,90 @@
+From 2a37711772eee369cc2f2275a7484f463c674db4 Mon Sep 17 00:00:00 2001
+From: Theodoros Theodoridis <theodort@inf.ethz.ch>
+Date: Tue, 20 Jun 2023 11:46:20 +0200
+Subject: [PATCH] linux/fs
+
+---
+ .../sanitizer_common/sanitizer_platform_limits_freebsd.cpp    | 2 +-
+ .../sanitizer_common/sanitizer_platform_limits_netbsd.cpp     | 4 ++--
+ .../sanitizer_common/sanitizer_platform_limits_openbsd.cpp    | 2 +-
+ .../sanitizer_common/sanitizer_platform_limits_posix.cpp      | 2 +-
+ .../sanitizer_common/sanitizer_platform_limits_solaris.cpp    | 2 +-
+ 5 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/libsanitizer/sanitizer_common/sanitizer_platform_limits_freebsd.cpp b/libsanitizer/sanitizer_common/sanitizer_platform_limits_freebsd.cpp
+index dcc6c71c07d..4bdea545de5 100644
+--- a/libsanitizer/sanitizer_common/sanitizer_platform_limits_freebsd.cpp
++++ b/libsanitizer/sanitizer_common/sanitizer_platform_limits_freebsd.cpp
+@@ -22,7 +22,7 @@
+ #include <sys/kbio.h>
+ #include <sys/link_elf.h>
+ #include <sys/mman.h>
+-#include <sys/mount.h>
++#include <linux/fs.h>
+ #include <sys/mqueue.h>
+ #include <sys/msg.h>
+ #include <sys/mtio.h>
+diff --git a/libsanitizer/sanitizer_common/sanitizer_platform_limits_netbsd.cpp b/libsanitizer/sanitizer_common/sanitizer_platform_limits_netbsd.cpp
+index 25da334b63f..ec9f982e449 100644
+--- a/libsanitizer/sanitizer_common/sanitizer_platform_limits_netbsd.cpp
++++ b/libsanitizer/sanitizer_common/sanitizer_platform_limits_netbsd.cpp
+@@ -25,7 +25,7 @@
+ #include <sys/sysctl.h>
+ #include <sys/disk.h>
+ #include <sys/disklabel.h>
+-#include <sys/mount.h>
++#include <linux/fs.h>
+ #include <sys/agpio.h>
+ #include <sys/ataio.h>
+ #include <sys/audioio.h>
+@@ -67,7 +67,7 @@
+ #include <sys/kcov.h>
+ #include <sys/mman.h>
+ #include <sys/module.h>
+-#include <sys/mount.h>
++#include <linux/fs.h>
+ #include <sys/mqueue.h>
+ #include <sys/msg.h>
+ #include <sys/mtio.h>
+diff --git a/libsanitizer/sanitizer_common/sanitizer_platform_limits_openbsd.cpp b/libsanitizer/sanitizer_common/sanitizer_platform_limits_openbsd.cpp
+index 1420ecbfa56..c2d1e4f1efe 100644
+--- a/libsanitizer/sanitizer_common/sanitizer_platform_limits_openbsd.cpp
++++ b/libsanitizer/sanitizer_common/sanitizer_platform_limits_openbsd.cpp
+@@ -39,7 +39,7 @@
+ #include <sys/filio.h>
+ #include <sys/ipc.h>
+ #include <sys/mman.h>
+-#include <sys/mount.h>
++#include <linux/fs.h>
+ #include <sys/msg.h>
+ #include <sys/mtio.h>
+ #include <sys/ptrace.h>
+diff --git a/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp b/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp
+index e71515f12e9..60a10d9f467 100644
+--- a/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp
++++ b/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp
+@@ -59,7 +59,7 @@
+ 
+ #if !SANITIZER_ANDROID
+ #include <fstab.h>
+-#include <sys/mount.h>
++#include <linux/fs.h>
+ #include <sys/timeb.h>
+ #include <utmpx.h>
+ #endif
+diff --git a/libsanitizer/sanitizer_common/sanitizer_platform_limits_solaris.cpp b/libsanitizer/sanitizer_common/sanitizer_platform_limits_solaris.cpp
+index 6ec1a1bdd11..634e2ecb083 100644
+--- a/libsanitizer/sanitizer_common/sanitizer_platform_limits_solaris.cpp
++++ b/libsanitizer/sanitizer_common/sanitizer_platform_limits_solaris.cpp
+@@ -36,7 +36,7 @@
+ #include <sys/filio.h>
+ #include <sys/ipc.h>
+ #include <sys/mman.h>
+-#include <sys/mount.h>
++#include <linux/fs.h>
+ #include <sys/mtio.h>
+ #include <sys/ptyvar.h>
+ #include <sys/resource.h>
+-- 
+2.41.0
+
