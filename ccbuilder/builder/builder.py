@@ -353,7 +353,7 @@ class Builder:
         Args:
             self:
             project (CompilerProject): Project to build.
-            rev (str): Revision of the project to build.
+            rev (Revision | Commit): Revision of the project to build.
             jobs (Optional[int]): Amount of jobs to use for the building.
             configure_flags (str | None): additional flags to pass to the configure script or cmake.
             force (bool): Build the specified compiler even if it has been cached before.
