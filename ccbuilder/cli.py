@@ -266,7 +266,7 @@ def parse_args() -> Options:
                 assert args["compiler"] in ("llvm", "gcc", "clang")
                 action = BuildActionOptions(
                     compiler=cast(Literal["llvm", "gcc", "clang"], args["compiler"]),
-                    revision=checked_cast(args["revision"], Revision),
+                    revision=Revision(checked_cast(args["revision"], str)),
                     additional_configure_flags=checked_cast(
                         args.get("additional_configure_flags", ""), str
                     ),
