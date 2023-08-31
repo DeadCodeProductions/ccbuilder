@@ -51,6 +51,8 @@ __all__ = [
     "get_llvm_repo",
     "get_compiler_info",
     "get_compiler_project",
+    "default_store_file",
+    "load_compiler_store",
     "initialize_repos",
     "initialize_patches_dir",
     "DEFAULT_COMPILER_STORE_DIR",
