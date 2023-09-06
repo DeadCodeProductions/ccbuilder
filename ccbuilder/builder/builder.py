@@ -165,9 +165,7 @@ def llvm_build_and_install(
     if configure_flags:
         cmake_cmd += " " + configure_flags
 
-    run_cmd_to_logfile(
-        cmake_cmd, additional_env={"CC": "clang", "CXX": "clang++"}, log_file=log_file
-    )
+    run_cmd_to_logfile(cmake_cmd, log_file=log_file)
 
     logging.debug("LLVM: Starting to build...")
     run_cmd_to_logfile(f"ninja -j {jobs} install", log_file=log_file)
