@@ -159,7 +159,7 @@ def llvm_build_and_install(
     cmake_cmd = (
         "cmake ../llvm -G Ninja -DCMAKE_BUILD_TYPE=Release "
         "-DLLVM_ENABLE_PROJECTS=clang -DLLVM_INCLUDE_BENCHMARKS=OFF "
-        "-DLLVM_INCLUDE_TESTS=OFF -DLLVM_USE_NEWPM=ON -DLLVM_TARGETS_TO_BUILD=X86 "
+        "-DLLVM_INCLUDE_TESTS=OFF -DLLVM_TARGETS_TO_BUILD=X86 "
         f"-DCMAKE_INSTALL_PREFIX={install_prefix} -DLLVM_LINK_LLVM_DYLIB=ON -DLLVM_BUILD_LLVM_DYLIB=ON"
     )
     if configure_flags:
